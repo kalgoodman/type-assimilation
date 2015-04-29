@@ -1,3 +1,7 @@
+#PDE libs
+lib/
+libs/
+
 *.class
 *.log
 

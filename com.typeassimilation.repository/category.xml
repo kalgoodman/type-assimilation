@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<site>
+   <feature url="features/com.typeassimilation.zest.examples_0.1.0.qualifier.jar" id="com.typeassimilation.zest.examples" version="0.1.0.qualifier">
+      <category name="GEF4 Zest"/>
+   </feature>
+   <category-def name="GEF4 Zest" label="GEF4 Zest"/>
+</site>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension
+         point="org.eclipse.ui.views">
+      <view
+            class="com.typeassimilation.scala.ScalalalaActualView"
+            id="com.typeassimilation.scala.ScalalalaActualView"
+            name="Kim's latest crazy example Z"
+            restorable="true">
+      </view>
+   </extension>
+
+</plugin>
