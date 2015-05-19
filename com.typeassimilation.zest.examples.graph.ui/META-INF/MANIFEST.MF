@@ -5,6 +5,15 @@ Bundle-SymbolicName: com.typeassimilation.zest.examples.graph.ui;singleton:=true
 Bundle-Version: 0.1.0.qualifier
 Bundle-Vendor: Eclipse GEF
 Bundle-RequiredExecutionEnvironment: JavaSE-1.7
+Bundle-ClassPath: lib/scala-library-2.11.4.jar,
+ lib/scala-reflect-2.11.4.jar,
+ lib/scala-xml_2.11-1.0.3.jar,
+ lib/scalafx_2.11-2.2.76-R11.jar,
+ lib/config-1.2.0.jar,
+ lib/commons-lang3-3.1.jar,
+ lib/commons-io-2.4.jar,
+ .,
+ bin/
 Require-Bundle: com.google.guava;bundle-version="[15.0.0,16.0.0)",
  com.google.inject;bundle-version="[3.0.0,4.0.0)",
  org.eclipse.swt;bundle-version="[3.2.0,4.0.0)",
