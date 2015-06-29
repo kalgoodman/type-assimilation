@@ -25,6 +25,9 @@ object DataTypePersistence {
                   <assimilation>
                     { if (ar.name.isDefined) <name>{ ar.name.get }</name> }
                     <file-path>{ ar.filePath }</file-path>
+										{ if (ar.minimumOccurences.isDefined) <minimum-occurrence>{ar.minimumOccurences.get}</minimum-occurrence> }
+                    { if (ar.maximumOccurences.isDefined) <maximum-occurrence>{ar.maximumOccurences.get}</maximum-occurrence> }
+                    { if (ar.multipleOccurenceName.isDefined) <multiple-occurrence-name>{ar.multipleOccurenceName.get}</multiple-occurrence-name> }
                   </assimilation>
               }
             }
@@ -36,9 +39,16 @@ object DataTypePersistence {
     val elem = XML.loadFile(filePath.toFile(rootDirectory))
     new DataType(filePath,
       elem.childElemTextOption("name").get,
-      elem.childElemTextOption("description").get,
+      elem.childElemTextOption("description").getOrElse(""),
       (elem \ "assimilations" \ "assimilation").toElemSeq.map {
-        e => AssimilationReference(e.childElemTextOption("name"), FilePath(e.childElemTextOption("file-path").get))
+        e => AssimilationReference(
+            e.childElemTextOption("name"),
+            e.childElemTextOption("description"),
+            FilePath(e.childElemTextOption("file-path").get),
+            e.childElemTextOption("minimum-occurrence").map(_.toInt),
+            e.childElemTextOption("maximum-occurrence").map(_.toInt),
+            e.childElemTextOption("multiple-occurrence-name")
+       )
       })
   }
 }
@@ -65,8 +75,8 @@ object ModelPesistence {
   def files(directory: File) = DataTypePersistence.files(directory) ++ AssimilationPersistence.files(directory)
   def writeDirectory(model: Model, directory: File): Unit = {
     files(directory).foreach(_.delete)
-    model.dataTypes.foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
-    model.assimilations.foreach(a => FileUtils.writeStringToFile(a.filePath.toFile(directory), xmlPrettyPrint(AssimilationPersistence.toXml(a))))
+    model.dataTypes.filter(!Preset.DataType.All.contains(_)).foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
+    model.assimilations.filter(!Preset.Assimilation.All.contains(_)).foreach(a => FileUtils.writeStringToFile(a.filePath.toFile(directory), xmlPrettyPrint(AssimilationPersistence.toXml(a))))
   }
   def readDirectory(directory: File): Model = new Model(
     DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)),

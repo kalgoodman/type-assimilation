@@ -12,8 +12,7 @@ import scalafx.collections.ObservableSet
 import scala.collection.mutable
 import scalafx.beans.Observable
 import java.io.File
-import com.typeassimilation.implicits.EnhancedSeq
-import com.typeassimilation.implicits.EnhancedObservableBuffer
+import FilePath.Implicits._
 
 sealed trait ModelPart[T <: ModelPart[T]] {
   def filePath: FilePath.Absolute
@@ -22,6 +21,12 @@ sealed trait ModelPart[T <: ModelPart[T]] {
     updateNonNameProperties(t)
     true
   } else false
+  
+  override def hashCode = filePath.hashCode
+  override def equals(other: Any) = other match {
+    case mp : ModelPart[_] => filePath == mp.filePath
+    case _ => false
+  }
 }
 
 object ModelPart {
@@ -36,43 +41,88 @@ object ModelPart {
     val partsToRemove = observableCollectionToUpdate.toSeq -- newObservableCollection.toSeq
     observableCollectionToUpdate.removeAll(partsToRemove)
     observableCollectionToUpdate.addAll(partsToAdd)
-  } 
+  }
 }
 
 class DataType(val filePath: FilePath.Absolute, initialName: String, initialDescription: String, initialAssimilations: Seq[AssimilationReference]) extends ModelPart[DataType] {
   val name = StringProperty(initialName)
   val description = StringProperty(initialDescription)
-  val assimilationReferences = ObservableSet(initialAssimilations.toArray:_*)
+  val assimilationReferences = ObservableBuffer(initialAssimilations.toArray:_*)
   override def updateNonNameProperties(dataType: DataType): Unit = {
     description.value = dataType.description()
   } 
+  
+  val isPreset = false
 }
 
 case class DataTypeReference(filePath: FilePath)
-case class AssimilationReference(name: Option[String], filePath: FilePath)
+case class AssimilationReference(name: Option[String], description: Option[String], filePath: FilePath, minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String])
+
+object Preset {
+  val RootFilePath = "/$".asAbsolute
+  object DataType {
+    private val presetDataTypes = mutable.Set.empty[DataType]
+    private def presetDataType(name: String, description: String) = {
+      val dt = new DataType(RootFilePath + name.asRelative, name, description, Seq()) { override val isPreset = true }
+      presetDataTypes += dt
+      dt
+    }
+    val Identifier = presetDataType("IDENTIFIER","The preset identifier type.")
+    val DateTime = presetDataType("DATETIME", "The preset date/time type.")
+    val Date = presetDataType("DATE", "The preset date type.")
+    val Money = presetDataType("MONEY", "The preset money type (implies amount and currency).")
+    val IntegralNumber = presetDataType("INTEGER", "The preset integral number type (any whole number).")
+    val DecimalNumber = presetDataType("DECIMAL", "The preset decimal number type (any number that isn't integral).")
+    val Boolean = presetDataType("BOOLEAN", "The preset boolean type.")
+    val CharacterString = presetDataType("STRING", "The preset character string type.")
+    lazy val All = presetDataTypes.toSet 
+  }
+  object Assimilation {
+    private val presetAssimilations = mutable.Set.empty[Assimilation]
+    private def presetAssimilation(dataType: DataType) = {
+      val a = new Assimilation(dataType.filePath, Seq(DataTypeReference(dataType.filePath))) { override val isPreset = true }
+      presetAssimilations += a
+      a
+    }
+    val Identifier = presetAssimilation(DataType.Identifier)
+    val DateTime = presetAssimilation(DataType.DateTime)
+    val Date = presetAssimilation(DataType.Date)
+    val Money = presetAssimilation(DataType.Money)
+    val IntegralNumber = presetAssimilation(DataType.IntegralNumber)
+    val DecimalNumber = presetAssimilation(DataType.DecimalNumber)
+    val Boolean = presetAssimilation(DataType.Boolean)
+    val CharacterString = presetAssimilation(DataType.CharacterString)
+    lazy val All = presetAssimilations.toSet
+  } 
+}
 
 class Assimilation(val filePath: FilePath.Absolute, initialDataTypes: Seq[DataTypeReference]) extends ModelPart[Assimilation] {
   val dataTypeReferences = ObservableBuffer(initialDataTypes)
   override def updateNonNameProperties(assimilation: Assimilation): Unit = {
     dataTypeReferences.replaceWith(assimilation.dataTypeReferences)
   }
-}
-
-class Model(initialTypes: Traversable[DataType], initialAssimilations: Traversable[Assimilation]) {
-  val dataTypes = ObservableSet(initialTypes.toArray:_*)
-  def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
-  val assimilations = ObservableSet(initialAssimilations.toArray:_*)
-  def assimilationOption(filePath: FilePath.Absolute) = assimilations.find(_.filePath == filePath)
-  def updateTo(newModel: Model): Unit = {
-    ModelPart.updateModelPartsObservableBuffer(dataTypes, newModel.dataTypes)
-    ModelPart.updateModelPartsObservableBuffer(assimilations, newModel.assimilations)
-  }
+  val isPreset = false
+  def isSingular = dataTypeReferences.size == 1
 }
 
 object Model {
   object Implicits {
-    def dataTypeToEnhancedDataType(dataType: DataType) = new EnhancedDataType(dataType)
-    def assimilationToEnhancedAssimilation(assimilation: Assimilation) = new EnhancedAssimilation(assimilation)
+    implicit def dataTypeToEnhancedDataType(dataType: DataType) = new EnhancedDataType(dataType)
+    implicit def assimilationToEnhancedAssimilation(assimilation: Assimilation) = new EnhancedAssimilation(assimilation)
+  }
+}
+
+class Model(initialTypes: Traversable[DataType], initialAssimilations: Traversable[Assimilation], val defaultMinimumOccurences: Int = 0, val defaultMaximumOccurences: Option[Int] = Some(1)) {
+  import Model.Implicits._
+  implicit val _ = this
+  val dataTypes = ObservableSet(initialTypes.toArray:_*) ++ Preset.DataType.All
+  def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
+  val assimilations = ObservableSet(initialAssimilations.toArray:_*) ++ Preset.Assimilation.All
+  def assimilationOption(filePath: FilePath.Absolute) = assimilations.find(_.filePath == filePath)
+  def rootDataTypes = dataTypes.filter(_.selfAssimilations.isEmpty)
+  def updateTo(newModel: Model): Unit = {
+    ModelPart.updateModelPartsObservableBuffer(dataTypes, newModel.dataTypes)
+    ModelPart.updateModelPartsObservableBuffer(assimilations, newModel.assimilations)
   }
 }
 
@@ -81,6 +131,7 @@ class EnhancedDataType(dataType: DataType) {
     case Some(a) => a
     case None => throw new IllegalStateException(s"Reference made from data type ${dataType.filePath} to assimilation ${ar.filePath} which doesn't exist.")
   })
+  def selfAssimilations(implicit model: Model) = model.assimilations.filter(a => a.dataTypeReferences.map(_.filePath.toAbsoluteUsingBase(a.filePath.parent.get)).contains(dataType.filePath))
 }
 
 class EnhancedAssimilation(assimilation: Assimilation) {
@@ -88,4 +139,6 @@ class EnhancedAssimilation(assimilation: Assimilation) {
     case Some(dt) => dt
     case None => throw new IllegalStateException(s"Reference made from assimilation ${assimilation.filePath} to data type ${dtr.filePath} which doesn't exist.")
   })
+  def singleDataType(implicit model: Model) = if (assimilation.dataTypeReferences.size == 1) dataTypes.head else throw new IllegalStateException(s"The code assumes a single data type but this assimilation references multiple data types: ${assimilation.dataTypeReferences.map(_.filePath).mkString(",")}")
 }
+
