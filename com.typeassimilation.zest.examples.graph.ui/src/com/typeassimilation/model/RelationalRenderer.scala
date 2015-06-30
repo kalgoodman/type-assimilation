@@ -24,18 +24,14 @@ object RelationalRenderer {
     override def toString = "TABLES:\n\n" + tables.toList.sortBy(_.name).mkString("\n") +
       "\nENUMERATIONS:\n\n" + enumerations.toList.sortBy(_.name).mkString("\n")
   }
-  case class Table(name: String, description: Option[String], columns: Seq[Column], sourceDataType: Option[DataType] = None) {
+  case class Table(name: String, description: Option[String], columns: Seq[Column], assimilationPath: AssimilationPath[_]) {
     private val nameToColumnMap = columns.map(c => c.name -> c).toMap
     def column(name: String) = nameToColumnMap.get(name)
     def primaryKeys = columns.filter(_.isPrimaryKey)
     def foreignKeys = columns.filter(_.foreignKeyReference.isDefined)
     override def toString = name + (if (description.isDefined) s" - ${description.get}" else "") + " {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
   }
-  case class SourceAssimilation(dataType: DataType, assimilationReference: AssimilationReference) {
-    def assimilationOption(implicit model: Model) = model.assimilationOption(assimilationReference.filePath.toAbsoluteUsingBase(dataType.filePath.parent.get))
-    def assimilation(implicit model: Model) = assimilationOption.get
-  }
-  case class Column(name: String, description: Option[String], `type`: ColumnType, isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None, sourceAssimilation: Option[SourceAssimilation] = None) {
+  case class Column(name: String, description: Option[String], `type`: ColumnType, assimilationPath: AssimilationPath[_], isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
     override def toString = s"$name " + `type`.toString + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
       if (isPrimaryKey && foreignKeyReference.isEmpty) "(PK)"
       else if (!isPrimaryKey && foreignKeyReference.isDefined) "(FK -> " + foreignKeyReference.get + ")"
@@ -71,7 +67,7 @@ object RelationalRenderer {
     maximumSubTypeColumnsBeforeSplittingOut: Int = 3)
 
   def render(implicit model: Model, config: Config = Config()): RelationalModel = {
-    RelationalModel(model.rootDataTypes.flatMap(toTable(_)).toSet)
+    RelationalModel(model.rootDataTypes.flatMap(dt => toTableFromDataType(AssimilationPath(dt))).toSet)
   }
 
   def toTableName(dataTypeName: String) = dataTypeName.trim.replaceAll("\\s+", "_").toUpperCase
@@ -81,15 +77,15 @@ object RelationalRenderer {
   def toEnumerationName(enumerationName: String) = toTableName(enumerationName)
   def toEnumerationValueName(enumerationValueName: String) = toEnumerationName(enumerationValueName)
 
-  def toPresetColumns(currentTableName: String, sourceAssimilation: SourceAssimilation)(implicit config: Config, model: Model): Seq[Column] = {
+  def toPresetColumns(currentTableName: String, assimilationPath: AssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Seq[Column] = {
     def column(columnType: ColumnType, suffix: String = "") = Column(
-      name = sourceAssimilation.assimilationReference.name.map(toColumnName).getOrElse(sourceAssimilation.assimilation.dataTypes.head.name()) + suffix,
-      description = sourceAssimilation.assimilationReference.description,
+      name = assimilationPath.tipAssimilationReference.assimilationReference.name.map(toColumnName).getOrElse(assimilationPath.tipAssimilation.singleDataType.name()) + suffix,
+      description = assimilationPath.tipDescription,
       `type` = columnType,
       isPrimaryKey = false,
-      sourceAssimilation = Some(sourceAssimilation))
+      assimilationPath = assimilationPath)
     import Preset.Assimilation._
-    sourceAssimilation.assimilation match {
+    assimilationPath.tipAssimilation match {
       case Identifier => Seq(column(ColumnType.VariableCharacter(config.identifierLength)))
       case DateTime => Seq(column(ColumnType.DateTime))
       case Date => Seq(column(ColumnType.Date))
@@ -105,14 +101,14 @@ object RelationalRenderer {
     def foreignKeyReferences = primaryKeys.map(pk => ColumnReference(name, pk.name))
   }
 
-  def columnsAndChildTables(currentTableInformation: TableInformation, sourceAssimilation: SourceAssimilation)(implicit config: Config, model: Model): (Seq[Column], Set[Table]) = {
+  def columnsAndChildTables(currentTableInformation: TableInformation, assimilationPath: AssimilationPath[AssimilationReference])(implicit config: Config, model: Model): (Seq[Column], Set[Table]) = {
     def isNonGeneratedColumn(c: Column) = !c.isPrimaryKey && c.foreignKeyReference.map(_.tableName != currentTableInformation.name).getOrElse(true)
-    def consumeColumns(cs: Seq[Column]) = cs.map(c => c.copy(name = toColumnName(s"${sourceAssimilation.assimilationReference.name.getOrElse("")} ${c.name}")))
-    val maxOccurs = sourceAssimilation.assimilationReference.maximumOccurences
+    def consumeColumns(cs: Seq[Column]) = cs.map(c => c.copy(name = toColumnName(s"${assimilationPath.tipAssimilationReference.assimilationReference.name.getOrElse("")} ${c.name}")))
+    val maxOccurs = assimilationPath.tipAssimilationReference.assimilationReference.maximumOccurences
 
-    if (maxOccurs == None || maxOccurs.get > config.maximumOccurencesTableLimit) (Seq(), toTable(sourceAssimilation, currentTableInformation))
+    if (maxOccurs == None || maxOccurs.get > config.maximumOccurencesTableLimit) (Seq(), toTableFromAssimilationReference(assimilationPath, currentTableInformation))
     else if (maxOccurs.get >= 1) {
-      val tables = toTable(sourceAssimilation, currentTableInformation)
+      val tables = toTableFromAssimilationReference(assimilationPath, currentTableInformation)
       if (tables.size == 1) {
         val comsumedColumns = consumeColumns(tables.head.columns.filter(isNonGeneratedColumn))
         if (maxOccurs.get == 1) (comsumedColumns, Set())
@@ -124,66 +120,66 @@ object RelationalRenderer {
     } else (Seq(), Set()) // Bizarre case where maxOccurences is set to zero?
   }
   
-  def toTable(sourceAssimilation: SourceAssimilation, parent: TableInformation)(implicit config: Config, model: Model): Set[Table] = {
-    def sourceAssimilationAsTable(dataType: DataType) = toTable(
-      dataType,
-      Some(sourceAssimilation.assimilationReference.name.getOrElse(s"${parent.name} ${dataType.name()}")),
-      sourceAssimilation.assimilationReference.description.orElse(Some(dataType.description())),
-      Some(parent))
+  def toTableFromAssimilationReference(assimilationPath: AssimilationPath[AssimilationReference], parent: TableInformation)(implicit config: Config, model: Model): Set[Table] = {
+    def sourceAssimilationAsTable(dataType: AssimilationPath[DataType]) = toTableFromDataType(dataType, Some(parent))
     
     def isNonGeneratedColumn(c: Column) = !c.isPrimaryKey && c.foreignKeyReference.map(_.tableName != parent.name).getOrElse(true)
-    def consumeColumns(cs: Seq[Column]) = cs.map(c => c.copy(name = toColumnName(s"${sourceAssimilation.assimilationReference.name.getOrElse("")} ${c.name}")))
+    def consumeColumns(cs: Seq[Column]) = cs.map(c => c.copy(name = toColumnName(s"${assimilationPath.tipAssimilationReference.assimilationReference.name.getOrElse("")} ${c.name}")))
     
-    if (sourceAssimilation.assimilation.isPreset) {
-      val ti = createTableInformation(sourceAssimilation.assimilationReference.name.getOrElse(s"${sourceAssimilation.dataType.name} Type"))
+    if (assimilationPath.tipAssimilation.isPreset) {
+      val ti = createTableInformation(assimilationPath)
       Set(Table(
         name = ti.name,
-        description = sourceAssimilation.assimilationReference.description.map(toTableDescription),
-        columns = ti.primaryKeys ++ parent.primaryKeys.map(pk => toForeignKey(parent.name, pk)) ++ toPresetColumns(ti.name, sourceAssimilation)
+        description = assimilationPath.tipDescription.map(toTableDescription),
+        columns = ti.primaryKeys ++ parent.primaryKeys.map(pk => toForeignKey(parent.name, pk)) ++ toPresetColumns(ti.name, assimilationPath),
+        assimilationPath = assimilationPath
       ))
     }
-    else if (sourceAssimilation.assimilation.dataTypeReferences.size == 1) sourceAssimilationAsTable(sourceAssimilation.assimilation.singleDataType)
-    else  if (sourceAssimilation.assimilation.dataTypeReferences.size > 1) {
-      val (consumedColumns, childTables) = sourceAssimilation.assimilation.dataTypes.map(sourceAssimilationAsTable).foldLeft((Seq.empty[Column], Set.empty[Table])) {
+    else if (assimilationPath.tipDataTypes.size == 1) sourceAssimilationAsTable(assimilationPath + assimilationPath.singleTipDataType)
+    else  if (assimilationPath.tipDataTypes.size > 1) {
+      val (consumedColumns, childTables) = assimilationPath.tipDataTypes.map(dt => sourceAssimilationAsTable(assimilationPath + dt)).foldLeft((Seq.empty[Column], Set.empty[Table])) {
         case ((fcs, fts), ts) => if (ts.size == 1 && ts.head.columns.filter(isNonGeneratedColumn).size <= config.maximumSubTypeColumnsBeforeSplittingOut) (fcs ++ consumeColumns(ts.head.columns.filter(isNonGeneratedColumn)), fts) else (fcs, fts ++ ts)
       }
-      val e = toEnumeration(sourceAssimilation)
-      val ti = createTableInformation(sourceAssimilation.assimilationReference.name.getOrElse(s"${sourceAssimilation.dataType.name()} Type"))
+      val e = toEnumeration(assimilationPath)
+      val ti = createTableInformation(assimilationPath)
       
       childTables + Table(
         name = ti.name,
-        description = sourceAssimilation.assimilationReference.description.map(toTableDescription),
+        description = assimilationPath.tipAssimilationReference.assimilationReference.description.map(toTableDescription),
         columns = ti.primaryKeys ++ parent.primaryKeys.map(pk => toForeignKey(parent.name, pk)) ++ 
         {Column(
-          name = sourceAssimilation.assimilationReference.name.getOrElse(toColumnName(s"${sourceAssimilation.dataType.name()}_TYPE") + "_CD"),
-          description = sourceAssimilation.assimilationReference.description,
+          name = assimilationPath.tipAssimilationReference.assimilationReference.name.getOrElse(toColumnName(s"${assimilationPath.tipAssimilationReference.dataType.name()}_TYPE") + "_CD"),
+          description = assimilationPath.tipAssimilationReference.assimilationReference.description,
           `type` = ColumnType.VariableCharacter(e.maximumValueSize),
-          enumeration = Some(e)
-        ) +: consumedColumns}
+          enumeration = Some(e),
+          assimilationPath = assimilationPath
+        ) +: consumedColumns},
+        assimilationPath = assimilationPath        
       ) 
     }
-    else throw new IllegalStateException(s"It is illegal for assimililation '${sourceAssimilation.assimilationReference.filePath}'' to have no data type references.")
+    else throw new IllegalStateException(s"It is illegal for assimililation '${assimilationPath.tipAssimilationReference.assimilationReference.filePath}'' to have no data type references.")
   }
 
-  def toEnumeration(sourceAssimilation: SourceAssimilation)(implicit config: Config, model: Model) =
-    Enumeration(sourceAssimilation.assimilationReference.name.getOrElse(toEnumerationName(s"${sourceAssimilation.dataType.name()} Type")),
-      sourceAssimilation.assimilation.dataTypes.map(dt => EnumerationValue(toEnumerationValueName(dt.name()), Some(dt.description()))))
+  def toEnumeration(assimilationPath: AssimilationPath[AssimilationReference])(implicit config: Config, model: Model) =
+    Enumeration(toEnumerationName(assimilationPath.tipName),
+      assimilationPath.tipDataTypes.map(dt => EnumerationValue(toEnumerationValueName(dt.name()), Some(dt.description()))))
 
   def toForeignKey(parentTableName: String, primaryKeyColumn: Column) = Column(
       name = primaryKeyColumn.name,
       description = primaryKeyColumn.description.map(toForeignKeyDescription),
       `type` = primaryKeyColumn.`type`,
+      primaryKeyColumn.assimilationPath, // Hmmm... Not sure what should be here
       foreignKeyReference = Some(primaryKeyColumn.toForeignKeyReference(parentTableName)))
   
-  def createTableInformation(conceptualName: String) = {
-    val tableName = toTableName(conceptualName)
-    val primaryKey = Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), ColumnType.Number(15, 0), true)
+  def createTableInformation(assimilationPath: AssimilationPath[_]) = {
+    val tableName = toTableName(assimilationPath.tipName)
+    val primaryKey = Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), ColumnType.Number(15, 0), assimilationPath, true)
     TableInformation(tableName, Seq(primaryKey))
   }    
       
-  def toTable(dataType: DataType, name: Option[String] = None, description: Option[String] = None, parent: Option[TableInformation] = None)(implicit config: Config, model: Model): Set[Table] = {
-    val ti = createTableInformation(name.getOrElse(dataType.name()))
-    val (columns, childTables) = dataType.assimilationReferences.map(ar => columnsAndChildTables(ti, SourceAssimilation(dataType, ar))).foldLeft((Seq.empty[Column], Set.empty[Table])) {
+  def toTableFromDataType(assimilationPath: AssimilationPath[DataType], parent: Option[TableInformation] = None)(implicit config: Config, model: Model): Set[Table] = {
+    val ti = createTableInformation(assimilationPath)
+    val (columns, childTables) = assimilationPath.tipDataType.assimilationReferences.map(ar => columnsAndChildTables(ti, assimilationPath + ar)).foldLeft((Seq.empty[Column], Set.empty[Table])) {
       case ((fcs, fts), (cs, ts)) => (fcs ++ cs, fts ++ ts)
     }
     def parentForeignKeyColumns = for {
@@ -192,9 +188,9 @@ object RelationalRenderer {
     } yield toForeignKey(parentTableInformation.name, pc)
     Set(Table(
       ti.name,
-      Some(toTableDescription(description.getOrElse(dataType.description()))),
+      assimilationPath.tipDescription.map(toTableDescription),
       ti.primaryKeys ++ parentForeignKeyColumns ++ columns,
-      Some(dataType))) ++ childTables
+      assimilationPath)) ++ childTables
   }
 
 }

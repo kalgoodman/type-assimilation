@@ -57,7 +57,11 @@ class DataType(val filePath: FilePath.Absolute, initialName: String, initialDesc
 
 case class DataTypeReference(filePath: FilePath)
 case class AssimilationReference(name: Option[String], description: Option[String], filePath: FilePath, minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String])
-
+case class AbsoluteAssimilationReference(dataType: DataType, assimilationReference: AssimilationReference) {
+    def assimilationOption(implicit model: Model) = model.assimilationOption(assimilationReference.filePath.toAbsoluteUsingBase(dataType.filePath.parent.get))
+    def assimilation(implicit model: Model) = assimilationOption.get
+}
+  
 object Preset {
   val RootFilePath = "/$".asAbsolute
   object DataType {
@@ -103,6 +107,48 @@ class Assimilation(val filePath: FilePath.Absolute, initialDataTypes: Seq[DataTy
   }
   val isPreset = false
   def isSingular = dataTypeReferences.size == 1
+}
+
+case class AssimilationPath[T](assimilationReferences: Seq[AbsoluteAssimilationReference], tipDataTypeOption: Option[DataType]) {
+  def tipDataType = tipDataTypeOption.get
+  def tipAssimilationReference = assimilationReferences.last
+  def tipAssimilation(implicit model: Model) = tipAssimilationReference.assimilation
+  def tip: Either[DataType, AbsoluteAssimilationReference] = tipDataTypeOption match {
+    case None => Right(tipAssimilationReference)
+    case Some(dataType) => Left(dataType)
+  }
+  def +(assimilationReference: AssimilationReference): AssimilationPath[AssimilationReference] = copy(assimilationReferences = assimilationReferences :+ AbsoluteAssimilationReference(tipDataTypeOption.getOrElse(throw new IllegalStateException(s"The tip is not currently a DataType (it is an assimilation reference - $tipAssimilationReference)")), assimilationReference), tipDataTypeOption = None)
+  def +(dataType: DataType): AssimilationPath[DataType] = if(tipDataTypeOption.isDefined) throw new IllegalStateException(s"The tip is not currently an Assimilation reference (it is a dataType - ${tipDataType})") else copy(tipDataTypeOption = Some(dataType))
+  def parent = tip match {
+    case Left(dataType) => if(assimilationReferences.isEmpty) None else Some(copy(tipDataTypeOption = None))
+    case Right(assimilationReference) => Some(copy(assimilationReferences = assimilationReferences.dropRight(1), tipDataTypeOption = Some(assimilationReference.dataType)))
+  }
+  def assimilationReferenceParent: Option[AssimilationPath[AssimilationReference]] = parent.flatMap { ap =>
+    ap.tip match {
+      case Left(dataType) => None
+      case Right(assimilationReference) => Some(ap.asInstanceOf[AssimilationPath[AssimilationReference]])
+    }  
+  }
+  def dataTypeParent: Option[AssimilationPath[DataType]] = parent.flatMap { ap =>
+    ap.tip match {
+      case Left(dataType) => Some(ap.asInstanceOf[AssimilationPath[DataType]])
+      case Right(assimilationReference) => None
+    }  
+  }
+  def tipName = tip match {
+    case Left(dataType) => assimilationReferenceParent.flatMap(_.tipAssimilationReference.assimilationReference.name).getOrElse(dataType.name())
+    case Right(assimilationReference) => assimilationReference.assimilationReference.name.getOrElse(assimilationReference.dataType.name() + " Type")
+  }
+  def tipDescription = tip match {
+    case Left(dataType) => if (dataType.description() == "") None else Some(dataType.description()) 
+    case Right(assimilationReference) => assimilationReference.assimilationReference.description
+  }
+  def tipDataTypes(implicit model: Model) = tipAssimilation.dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath.toAbsoluteUsingBase(tipAssimilation.filePath.parent.get)))
+  def singleTipDataType(implicit model: Model) = tipDataTypes.head
+}
+
+object AssimilationPath {
+  def apply(rootDataType: DataType): AssimilationPath[DataType] = AssimilationPath[DataType](Seq(), Some(rootDataType))
 }
 
 object Model {
