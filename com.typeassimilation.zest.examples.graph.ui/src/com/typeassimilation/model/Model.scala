@@ -115,6 +115,36 @@ class Assimilation(val filePath: FilePath.Absolute, initialDataTypes: Seq[DataTy
   def isSingular = dataTypeReferences.size == 1
 }
 
+case class JoinedAssimilationPath[T](assimilationPaths: Set[AssimilationPath[T]]) {
+  
+  private def delegateTipAssimilationPath = assimilationPaths.head 
+  def tip = delegateTipAssimilationPath.tip
+  def tipAssimilationReference = delegateTipAssimilationPath.tipAssimilationReference
+  def tipDataType = delegateTipAssimilationPath.tipDataType
+  def tipAssimilation(implicit model: Model) = delegateTipAssimilationPath.tipAssimilation
+  def tipDataTypes(implicit model: Model) = delegateTipAssimilationPath.tipDataTypes
+  def singleTipDataType(implicit model: Model) = delegateTipAssimilationPath.singleTipDataType
+  // These 2 probably need rework...
+  def tipName = delegateTipAssimilationPath.tipName
+  def tipDescription = delegateTipAssimilationPath.tipDescription
+  
+  def +(assimilationPath: AssimilationPath[T]) = if (assimilationPath.tip == tip) copy(assimilationPaths = assimilationPaths + assimilationPath) else throw new IllegalStateException(s"Tips are inconsistent.")
+  def +(joinedAssimilationPath: JoinedAssimilationPath[T]) = if (joinedAssimilationPath.tip == tip) copy(assimilationPaths = assimilationPaths ++ joinedAssimilationPath.assimilationPaths) else throw new IllegalStateException(s"Tips are inconsistent.")
+  def +(assimilationReference: AssimilationReference): JoinedAssimilationPath[AssimilationReference] = copy(assimilationPaths = assimilationPaths.map(_ + assimilationReference))
+  def +(dataType: DataType): JoinedAssimilationPath[DataType] = copy(assimilationPaths = assimilationPaths.map(_ + dataType))
+  private def toJoinedAssimilationPaths[T](aps: Set[AssimilationPath[T]]) = aps.groupBy(_.tip).values.map(JoinedAssimilationPath[T](_)).toSet 
+  def parents = toJoinedAssimilationPaths[Nothing](assimilationPaths.flatMap(_.parent))
+  def assimilationReferenceParents = toJoinedAssimilationPaths(assimilationPaths.flatMap(_.assimilationReferenceParent).toSet)
+  def dataTypeParents = toJoinedAssimilationPaths(assimilationPaths.flatMap(_.dataTypeParent).toSet)
+  
+  override def toString = if (assimilationPaths.size == 1) assimilationPaths.head.toString else s"{\n\t${assimilationPaths.mkString("\n\t")}\n}"
+}
+ 
+object JoinedAssimilationPath {
+  def apply[T](assimilationPath: AssimilationPath[T]): JoinedAssimilationPath[T] = JoinedAssimilationPath[T](Set(assimilationPath))
+  def apply(dataType: DataType): JoinedAssimilationPath[DataType] = apply(AssimilationPath(dataType))
+}
+
 case class AssimilationPath[T](assimilationReferences: Seq[AbsoluteAssimilationReference], tipDataTypeOption: Option[DataType]) {
   def tipDataType = tipDataTypeOption.get
   def tipAssimilationReference = assimilationReferences.last
