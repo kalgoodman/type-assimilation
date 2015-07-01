@@ -74,11 +74,14 @@ object Preset {
     val Identifier = presetDataType("IDENTIFIER","The preset identifier type.")
     val DateTime = presetDataType("DATETIME", "The preset date/time type.")
     val Date = presetDataType("DATE", "The preset date type.")
+    val Time = presetDataType("TIME", "The preset time type.")
     val Money = presetDataType("MONEY", "The preset money type (implies amount and currency).")
     val IntegralNumber = presetDataType("INTEGER", "The preset integral number type (any whole number).")
     val DecimalNumber = presetDataType("DECIMAL", "The preset decimal number type (any number that isn't integral).")
     val Boolean = presetDataType("BOOLEAN", "The preset boolean type.")
-    val CharacterString = presetDataType("STRING", "The preset character string type.")
+    val TextBlock = presetDataType("TEXTBLOCK", "The preset block of text type.")
+    val ShortName = presetDataType("SHORTNAME", "The preset short name type.")
+    val LongName = presetDataType("LONGNAME", "The preset long name type.")
     lazy val All = presetDataTypes.toSet 
   }
   object Assimilation {
@@ -91,11 +94,14 @@ object Preset {
     val Identifier = presetAssimilation(DataType.Identifier)
     val DateTime = presetAssimilation(DataType.DateTime)
     val Date = presetAssimilation(DataType.Date)
+    val Time = presetAssimilation(DataType.Time)
     val Money = presetAssimilation(DataType.Money)
     val IntegralNumber = presetAssimilation(DataType.IntegralNumber)
     val DecimalNumber = presetAssimilation(DataType.DecimalNumber)
     val Boolean = presetAssimilation(DataType.Boolean)
-    val CharacterString = presetAssimilation(DataType.CharacterString)
+    val TextBlock = presetAssimilation(DataType.TextBlock)
+    val ShortName = presetAssimilation(DataType.ShortName)
+    val LongName = presetAssimilation(DataType.LongName)
     lazy val All = presetAssimilations.toSet
   } 
 }
@@ -145,6 +151,10 @@ case class AssimilationPath[T](assimilationReferences: Seq[AbsoluteAssimilationR
   }
   def tipDataTypes(implicit model: Model) = tipAssimilation.dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath.toAbsoluteUsingBase(tipAssimilation.filePath.parent.get)))
   def singleTipDataType(implicit model: Model) = tipDataTypes.head
+  override def toString = {
+    def descriptor(dataType: DataType) = s"${dataType.name()} (${dataType.filePath})" 
+    (assimilationReferences.map(ar => s"${descriptor(ar.dataType)} -> ${ar.assimilationReference.name.getOrElse("<ANONYMOUS>")} (${ar.assimilationReference.filePath.toAbsoluteUsingBase(ar.dataType.filePath.parent.get)})") ++ tipDataTypeOption.map(descriptor)).mkString(" => ")
+  }
 }
 
 object AssimilationPath {

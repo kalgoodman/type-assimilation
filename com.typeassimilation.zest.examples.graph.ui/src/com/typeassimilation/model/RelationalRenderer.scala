@@ -6,6 +6,7 @@ object RelationalRenderer {
   sealed trait ColumnType
   object ColumnType {
     case object Date extends ColumnType
+    case object Time extends ColumnType
     case object DateTime extends ColumnType
     case class VariableCharacter(size: Int) extends ColumnType
     case class FixedCharacter(size: Int) extends ColumnType
@@ -42,7 +43,7 @@ object RelationalRenderer {
     def column(name: String) = nameToColumnMap.get(name)
     def primaryKeys = columns.filter(_.isPrimaryKey)
     def foreignKeys = columns.filter(_.foreignKeyReference.isDefined)
-    override def toString = name + (if (description.isDefined) s" - ${description.get}" else "") + " {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
+    override def toString = name + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath] {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
   }
   case class Column(name: String, description: Option[String], `type`: ColumnType, assimilationPath: AssimilationPath[_], isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
     override def toString = s"$name " + `type`.toString + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
@@ -50,7 +51,7 @@ object RelationalRenderer {
       else if (!isPrimaryKey && foreignKeyReference.isDefined) "(FK -> " + foreignKeyReference.get + ")"
       else if (isPrimaryKey && foreignKeyReference.isDefined) "(PFK -> " + foreignKeyReference.get + ")"
       else ""
-    } + (if (description.isDefined) s" - ${description.get}" else "")
+    } + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath]"
     def toForeignKeyReference(tableName: String) = ColumnReference(tableName, name)
   }
   case class ColumnReference(tableName: String, columnName: String) {
@@ -106,7 +107,9 @@ object RelationalRenderer {
       case IntegralNumber => Seq(column(ColumnType.Integer))
       case DecimalNumber => Seq(column(ColumnType.Number(10, 5)))
       case Boolean => Seq(column(ColumnType.FixedCharacter(1)))
-      case CharacterString => Seq(column(ColumnType.VariableCharacter(500)))
+      case TextBlock => Seq(column(ColumnType.VariableCharacter(500)))
+      case ShortName => Seq(column(ColumnType.VariableCharacter(50)))
+      case LongName => Seq(column(ColumnType.VariableCharacter(100)))
     }
   }
 
