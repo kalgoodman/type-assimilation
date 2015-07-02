@@ -25,18 +25,23 @@ object RelationalRenderer {
     override def toString = "TABLES:\n\n" + tables.toList.sortBy(_.name).mkString("\n") +
       "\nENUMERATIONS:\n\n" + enumerations.toList.sortBy(_.name).mkString("\n")
   }
-  case class TableSet(head: Table, tail: Set[Table]) {
-    def toSet = tail + head
-    def migrateHeadColumnsTo(newParent: TableInformation): (Seq[Column], Set[Table]) = (
-      head.columns.filter(c => !c.isPrimaryKey && !c.foreignKeyReference.isDefined),
-      tail.map(t => t.copy(columns = {
-        val columnsWithRemovedPreviousParent = t.columns.filterNot(c => c.foreignKeyReference.isDefined && c.foreignKeyReference.get.tableName == head.name)
+  case class TableSet(table: Table, childTableSets: Set[TableSet]) {
+    def toSet: Set[Table] = childTableSets.flatMap(_.toSet) + table
+    def isMergeableWith(other: TableSet) = table.foreignKeys == other.table.foreignKeys && 
+                                           table.assimilationPath.tip == other.table.assimilationPath.tip &&
+                                           table.assimilationPath.parents.size == 1 && other.table.assimilationPath.parents.size == 1 &&
+                                           table.assimilationPath.parents.head.tip == other.table.assimilationPath.parents.head.tip
+    def mergeWith(other: TableSet) = ???                                           
+    def migrateHeadColumnsTo(newParent: TableInformation): (Seq[Column], Set[TableSet]) = (
+      table.columns.filter(c => !c.isPrimaryKey && !c.foreignKeyReference.isDefined),
+      childTableSets.map(ts => ts.copy(table = ts.table.copy(columns = {
+        val columnsWithRemovedPreviousParent = ts.table.columns.filterNot(c => c.foreignKeyReference.isDefined && c.foreignKeyReference.get.tableName == table.name)
         val keys = columnsWithRemovedPreviousParent.filter(_.isPrimaryKey) match {
           case pks if pks.isEmpty => newParent.primaryForeignKeys
           case pks => pks ++ newParent.foreignKeys
         }
         keys ++ columnsWithRemovedPreviousParent.filter(!_.isPrimaryKey)
-      })))
+      }))))
   }
   case class Table(name: String, description: Option[String], columns: Seq[Column], assimilationPath: JoinedAssimilationPath[_]) {
     private val nameToColumnMap = columns.map(c => c.name -> c).toMap
@@ -130,21 +135,21 @@ object RelationalRenderer {
     if (c.name.contains(newParentName)) c.name else toColumnName(s"$newParentName ${c.name}")
   }))
 
-  def columnsAndChildTables(currentTableInformation: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): (Seq[Column], Set[Table]) = {
+  def columnsAndChildTables(currentTableInformation: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): (Seq[Column], Set[TableSet]) = {
     val tableSet = toTableFromAssimilationReference(assimilationPath, currentTableInformation)
     val (columns, childTables) = tableSet.migrateHeadColumnsTo(currentTableInformation)
     val comsumedColumns = consumeColumns(assimilationPath, columns.filter(c => isNonGeneratedColumn(currentTableInformation, c)))
     assimilationPath.tipAssimilationReference.assimilationReference.maximumOccurences match {
       case Some(maxOccurs) =>
-        if (maxOccurs > 1 && maxOccurs <= config.maximumOccurencesTableLimit && tableSet.tail.isEmpty)
+        if (maxOccurs > 1 && maxOccurs <= config.maximumOccurencesTableLimit && tableSet.childTableSets.isEmpty)
           (for {
             i <- (1 to (maxOccurs))
             c <- comsumedColumns
           } yield c.copy(name = s"${c.name}_$i"), Set())
         else if (maxOccurs == 1) (comsumedColumns, childTables)
-        else (Seq(), tableSet.toSet)
+        else (Seq(), Set(tableSet))
       case None =>
-        (Seq(), tableSet.toSet)
+        (Seq(), Set(tableSet))
     }
   }
 
@@ -159,13 +164,13 @@ object RelationalRenderer {
     } else if (assimilationPath.tipDataTypes.size == 1) toTableFromDataType(assimilationPath + assimilationPath.singleTipDataType, Some(parent))
     else if (assimilationPath.tipDataTypes.size > 1) {
       val subTypeParent = createTableInformation(assimilationPath)
-      val (consumedColumns, childTables) = assimilationPath.tipDataTypes.map(dt => toTableFromDataType(assimilationPath + dt, Some(subTypeParent), true)).foldLeft((Seq.empty[Column], Set.empty[Table])) {
+      val (consumedColumns, childTables) = assimilationPath.tipDataTypes.map(dt => toTableFromDataType(assimilationPath + dt, Some(subTypeParent), true)).foldLeft((Seq.empty[Column], Set.empty[TableSet])) {
         case ((fcs, fts), ts) =>
-          if (!config.maximumSubTypeColumnsBeforeSplittingOut.isDefined || ts.head.columns.filter(c => isNonGeneratedColumn(subTypeParent, c)).size <= config.maximumSubTypeColumnsBeforeSplittingOut.get) {
+          if (!config.maximumSubTypeColumnsBeforeSplittingOut.isDefined || ts.table.columns.filter(c => isNonGeneratedColumn(subTypeParent, c)).size <= config.maximumSubTypeColumnsBeforeSplittingOut.get) {
             val (columns, migratedChildTables) = ts.migrateHeadColumnsTo(subTypeParent)
             (fcs ++ consumeColumns(assimilationPath, columns.filter(c => isNonGeneratedColumn(subTypeParent, c))), fts ++ migratedChildTables)
           }
-          else (fcs, fts ++ ts.toSet)
+          else (fcs, fts + ts)
       }
       val e = toEnumeration(assimilationPath)
       TableSet(Table(
@@ -196,7 +201,7 @@ object RelationalRenderer {
 
   def toTableFromDataType(assimilationPath: JoinedAssimilationPath[DataType], parent: Option[TableInformation] = None, definingRelationship: Boolean = false)(implicit config: Config, model: Model): TableSet = {
     val ti = createTableInformation(assimilationPath, if (definingRelationship) parent.get.primaryForeignKeys else Seq())
-    val (columns, childTables) = assimilationPath.tipDataType.assimilationReferences.map(ar => columnsAndChildTables(ti, assimilationPath + ar)).foldLeft((Seq.empty[Column], Set.empty[Table])) {
+    val (columns, childTables) = assimilationPath.tipDataType.assimilationReferences.map(ar => columnsAndChildTables(ti, assimilationPath + ar)).foldLeft((Seq.empty[Column], Set.empty[TableSet])) {
       case ((fcs, fts), (cs, ts)) => (fcs ++ cs, fts ++ ts)
     }
     TableSet(Table(
