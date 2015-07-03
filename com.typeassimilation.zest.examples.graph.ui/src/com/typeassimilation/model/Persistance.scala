@@ -58,13 +58,17 @@ object AssimilationPersistence {
   def files(directory: File) = directory.listFiles.filter(_.getName.endsWith(FileExtension)).toSeq
   def toXml(assimilation: Assimilation) =
     <assimilation>
-			<types>
+			{ if (assimilation.name.isDefined) <name>{assimilation.name.get}</name> }
+      { if (assimilation.description.isDefined) <description>{assimilation.description.get}</description> }
+      <types>
       	{ assimilation.dataTypeReferences.map(t => <file-path>{ t.filePath }</file-path>) }
 			</types>
     </assimilation>
   def fromFile(filePath: FilePath.Absolute, rootDirectory: File) = {
     val elem = XML.loadFile(filePath.toFile(rootDirectory))
     new Assimilation(filePath,
+      elem.childElemTextOption("name"),
+      elem.childElemTextOption("description"),
       (elem \ "types" \ "file-path").toElemSeq.map(e => new DataTypeReference(FilePath(e.text))))
   }
 }
