@@ -11,6 +11,7 @@ import com.typeassimilation.implicits.EnhancedFile._
 
 object DataTypePersistence {
   val FileExtension = ".type.xml"
+  val UnboundedLimitName = "UNBOUNDED"
   def files(directory: File) = directory.listFiles.filter(_.getName.endsWith(FileExtension)).toSeq
   def toXml(dataType: DataType) =
     <type>
@@ -25,8 +26,8 @@ object DataTypePersistence {
                   <assimilation>
                     { if (ar.name.isDefined) <name>{ ar.name.get }</name> }
                     <file-path>{ ar.filePath }</file-path>
-										{ if (ar.minimumOccurences.isDefined) <minimum-occurrence>{ar.minimumOccurences.get}</minimum-occurrence> }
-                    { if (ar.maximumOccurences.isDefined) <maximum-occurrence>{ar.maximumOccurences.get}</maximum-occurrence> }
+										{ if (ar.minimumOccurences.isDefined && ar.minimumOccurences != Some(0)) <minimum-occurrence>{ar.minimumOccurences.get}</minimum-occurrence> }
+                    { if (ar.maximumOccurences != Some(1)) <maximum-occurrence>{ar.maximumOccurences.getOrElse(UnboundedLimitName)}</maximum-occurrence> }
                     { if (ar.multipleOccurenceName.isDefined) <multiple-occurrence-name>{ar.multipleOccurenceName.get}</multiple-occurrence-name> }
                   </assimilation>
               }
@@ -45,8 +46,15 @@ object DataTypePersistence {
             e.childElemTextOption("name"),
             e.childElemTextOption("description"),
             FilePath(e.childElemTextOption("file-path").get),
-            e.childElemTextOption("minimum-occurrence").map(_.toInt),
-            e.childElemTextOption("maximum-occurrence").map(_.toInt),
+            e.childElemTextOption("minimum-occurrence") match {
+              case None => Some(0)
+              case Some(x) => Some(x.toInt)
+            },
+            e.childElemTextOption("maximum-occurrence") match {
+              case Some(UnboundedLimitName) => None
+              case None => Some(1)
+              case Some(x) => Some(x.toInt)
+            },
             e.childElemTextOption("multiple-occurrence-name")
        )
       })
@@ -69,7 +77,8 @@ object AssimilationPersistence {
     new Assimilation(filePath,
       elem.childElemTextOption("name"),
       elem.childElemTextOption("description"),
-      (elem \ "types" \ "file-path").toElemSeq.map(e => new DataTypeReference(FilePath(e.text))))
+      (elem \ "types" \ "file-path").toElemSeq.map(e => new DataTypeReference(FilePath(e.text))),
+      false)
   }
 }
 
@@ -80,7 +89,7 @@ object ModelPesistence {
   def writeDirectory(model: Model, directory: File): Unit = {
     files(directory).foreach(_.delete)
     model.dataTypes.filter(!Preset.DataType.All.contains(_)).foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
-    model.assimilations.filter(!Preset.Assimilation.All.contains(_)).foreach(a => FileUtils.writeStringToFile(a.filePath.toFile(directory), xmlPrettyPrint(AssimilationPersistence.toXml(a))))
+    model.assimilations.filter(!_.isDirect).foreach(a => FileUtils.writeStringToFile(a.filePath.toFile(directory), xmlPrettyPrint(AssimilationPersistence.toXml(a))))
   }
   def readDirectory(directory: File): Model = new Model(
     DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)),

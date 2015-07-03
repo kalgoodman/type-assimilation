@@ -51,7 +51,9 @@ class DataType(val filePath: FilePath.Absolute, initialName: String, initialDesc
   override def updateNonNameProperties(dataType: DataType): Unit = {
     description.value = dataType.description()
   }
-  val isPreset = false
+  def isPreset = false
+  def reference = DataTypeReference(filePath)
+  lazy val directAssimilation = new Assimilation(filePath, None, None, Seq(reference), isPreset) { override val isDirect = true }
 }
 
 case class DataTypeReference(filePath: FilePath)
@@ -97,40 +99,14 @@ object Preset {
     }
     lazy val All = presetDataTypes.toSet
   }
-  object Assimilation {
-    private val presetAssimilations = mutable.Set.empty[Assimilation]
-    private def presetAssimilation(dataType: DataType) = {
-      val a = new Assimilation(dataType.filePath, None, None, Seq(DataTypeReference(dataType.filePath))) { override val isPreset = true }
-      presetAssimilations += a
-      a
-    }
-    val Identifier = presetAssimilation(DataType.Identifier)
-    val DateTime = presetAssimilation(DataType.DateTime)
-    val Date = presetAssimilation(DataType.Date)
-    val Time = presetAssimilation(DataType.Time)
-    val IntegralNumber = presetAssimilation(DataType.IntegralNumber)
-    val DecimalNumber = presetAssimilation(DataType.DecimalNumber)
-    val Boolean = presetAssimilation(DataType.Boolean)
-    val Code2 = presetAssimilation(DataType.Code2)
-    val Code3 = presetAssimilation(DataType.Code3)
-    val TextBlock = presetAssimilation(DataType.TextBlock)
-    val ShortName = presetAssimilation(DataType.ShortName)
-    val LongName = presetAssimilation(DataType.LongName)
-    val Money = {
-      val a = new Assimilation(DataType.Money.filePath, None, None, Seq(DataTypeReference(DataType.Money.filePath)))
-      presetAssimilations += a
-      a
-    }
-    lazy val All = presetAssimilations.toSet
-  }
 }
 
-class Assimilation(val filePath: FilePath.Absolute, val name: Option[String], val description: Option[String], initialDataTypes: Seq[DataTypeReference]) extends ModelPart[Assimilation] {
+class Assimilation(val filePath: FilePath.Absolute, val name: Option[String], val description: Option[String], initialDataTypes: Seq[DataTypeReference], val isPreset: Boolean) extends ModelPart[Assimilation] {
   val dataTypeReferences = ObservableBuffer(initialDataTypes)
   override def updateNonNameProperties(assimilation: Assimilation): Unit = {
     dataTypeReferences.replaceWith(assimilation.dataTypeReferences)
   }
-  val isPreset = false
+  val isDirect = false
   def isSingular = dataTypeReferences.size == 1
 }
 
@@ -222,11 +198,11 @@ case class AssimilationPath[T](assimilationReferences: Seq[AbsoluteAssimilationR
   def relativeTo(parentAssimilationPath: AssimilationPath[_]): RelativeAssimilationPath[T] =
     if (!isChildOf(parentAssimilationPath)) throw new IllegalStateException(s"The path $parentAssimilationPath is not a root path of $this.")
     else RelativeAssimilationPath(AssimilationPath(assimilationReferences.drop(parentAssimilationPath.assimilationReferences.size), tipDataTypeOption), parentAssimilationPath.tipDataTypeOption.isDefined)
+  def isChildOf(assimilationPath: AssimilationPath[_]) = assimilationReferences.startsWith(assimilationPath.assimilationReferences) && (!assimilationPath.tipDataTypeOption.isDefined || assimilationReferences(assimilationPath.assimilationReferences.size).dataType == assimilationPath.tipDataTypeOption.get)
   override def toString = {
     def descriptor(dataType: DataType) = s"${dataType.name()} (${dataType.filePath})"
-    (assimilationReferences.map(ar => s"${descriptor(ar.dataType)} -> ${ar.assimilationReference.name.getOrElse("<ANONYMOUS>")} (${ar.assimilationReference.filePath.toAbsoluteUsingBase(ar.dataType.filePath.parent.get)})") ++ tipDataTypeOption.map(descriptor)).mkString(" => ")
+    (assimilationReferences.map(ar => s"${descriptor(ar.dataType)} -> ${ar.assimilationReference.name.getOrElse("<ANONYMOUS>")} " + (if(ar.assimilationReference.filePath.stringValue.endsWith(".type.xml")) "=" else s"(${ar.assimilationReference.filePath.toAbsoluteUsingBase(ar.dataType.filePath.parent.get)}) ")) ++ tipDataTypeOption.map(descriptor)).mkString("=> ")
   }
-  def isChildOf(assimilationPath: AssimilationPath[_]) = assimilationReferences.startsWith(assimilationPath.assimilationReferences) && (!assimilationPath.tipDataTypeOption.isDefined || assimilationReferences(assimilationPath.assimilationReferences.size).dataType == assimilationPath.tipDataTypeOption.get)
 }
 case class RelativeAssimilationPath[T](assimilationPath: AssimilationPath[T], startOnAssimilationReference: Boolean)
 
@@ -246,9 +222,9 @@ class Model(initialTypes: Traversable[DataType], initialAssimilations: Traversab
   implicit val _ = this
   val dataTypes = ObservableSet(initialTypes.toArray: _*) ++ Preset.DataType.All
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
-  val assimilations = ObservableSet(initialAssimilations.toArray: _*) ++ Preset.Assimilation.All
+  val assimilations = ObservableSet(initialAssimilations.toArray: _*) ++ dataTypes.map(_.directAssimilation) // FIXME make immutable or add observer 
   def assimilationOption(filePath: FilePath.Absolute) = assimilations.find(_.filePath == filePath)
-  def rootDataTypes = dataTypes.filter(_.selfAssimilations.isEmpty)
+  def rootDataTypes = dataTypes.filter(dt => dt.referencedSelfAssimilations.isEmpty && !dt.isPreset)
   def updateTo(newModel: Model): Unit = {
     ModelPart.updateModelPartsObservableBuffer(dataTypes, newModel.dataTypes)
     ModelPart.updateModelPartsObservableBuffer(assimilations, newModel.assimilations)
@@ -260,7 +236,11 @@ class EnhancedDataType(dataType: DataType) {
     case Some(a) => a
     case None => throw new IllegalStateException(s"Reference made from data type ${dataType.filePath} to assimilation ${ar.filePath} which doesn't exist.")
   })
-  def selfAssimilations(implicit model: Model) = model.assimilations.filter(a => a.dataTypeReferences.map(_.filePath.toAbsoluteUsingBase(a.filePath.parent.get)).contains(dataType.filePath))
+  def definedSelfAssimilations(implicit model: Model) = model.assimilations.filter(a => !a.isDirect && a.dataTypeReferences.map(_.filePath.toAbsoluteUsingBase(a.filePath.parent.get)).contains(dataType.filePath))
+  def referencedSelfAssimilations(implicit model: Model) = {
+    val referenceAssimilationFilePaths = model.dataTypes.flatMap(dt => dt.assimilationReferences.map(_.filePath.toAbsoluteUsingBase(dt.filePath.parent.get)))
+    (definedSelfAssimilations + dataType.directAssimilation).flatMap { a => if (referenceAssimilationFilePaths.contains(a.filePath)) Some(a) else None }
+  }
 }
 
 class EnhancedAssimilation(assimilation: Assimilation) {
