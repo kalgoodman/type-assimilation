@@ -148,7 +148,7 @@ object RelationalRenderer {
         case None => cleanAndUpperCase(assimilationPath.tipName)
         case Some(ptap) =>
             val commonReferences = assimilationPath.relativeTo(ptap).assimilationPath.commonAssimilationReferences
-            cleanAndUpperCase((commonReferences.flatMap(_.assimilationReference.name) ++ assimilationPath.tipDataTypeOption.map(_.name())).mkString(" "))
+            cleanAndUpperCase((commonReferences.flatMap(_.assimilationReference.name) ++ assimilationPath.tipDataTypeOption.map(_.name)).mkString(" "))
       }
       def toTableDescription(assimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
       def toForeignKeyDescription(primaryKeyColumn: Column)(implicit config: Config, model: Model): String = s"Foreign key to ${primaryKeyColumn.description}"
@@ -158,7 +158,7 @@ object RelationalRenderer {
           else {
             val relative = columnAssimilationPath.relativeTo(tableAssimilationPath)
             val common = relative.assimilationPath.commonAssimilationReferences
-            val joined = (if (!relative.startOnAssimilationReference) common.head.dataType.name() else "") + " " + common.flatMap(_.assimilationReference.name).mkString(" ")
+            val joined = (if (!relative.startOnAssimilationReference) common.head.dataType.name else "") + " " + common.flatMap(_.assimilationReference.name).mkString(" ")
             if (joined.trim.isEmpty) columnAssimilationPath.tipName + (if (enumeration.isDefined) " Type Code" else "") else joined
           }
         })
@@ -170,7 +170,7 @@ object RelationalRenderer {
       def toColumnDescription(tableAssimilationPath: JoinedAssimilationPath[_], columnAssimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Option[String] = columnAssimilationPath.tipDescription
       def toEnumerationName(assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): String = assimilationPath.tipAssimilationReference.assimilation.name.getOrElse(assimilationPath.tipName).replaceAll("\\s+", "")
       def toEnumerationDesciption(assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipAssimilationReference.assimilation.description orElse assimilationPath.tipDescription
-      def toEnumerationValueName(assimilationPath: JoinedAssimilationPath[DataType])(implicit config: Config, model: Model): String = cleanAndUpperCase(assimilationPath.tipDataType.name())
+      def toEnumerationValueName(assimilationPath: JoinedAssimilationPath[DataType])(implicit config: Config, model: Model): String = cleanAndUpperCase(assimilationPath.tipDataType.name)
       def toEnumerationValueDescription(assimilationPath: JoinedAssimilationPath[DataType])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
     }
   }

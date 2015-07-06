@@ -15,8 +15,8 @@ object DataTypePersistence {
   def files(directory: File) = directory.listFiles.filter(_.getName.endsWith(FileExtension)).toSeq
   def toXml(dataType: DataType) =
     <type>
-      <name>{ dataType.name() }</name>
-      <description>{ dataType.description() }</description>
+      <name>{ dataType.name }</name>
+      { if (dataType.description.isDefined) <description>{ dataType.description }</description> }
       {
         if (!dataType.assimilationReferences.isEmpty) {
           <assimilations>
@@ -40,7 +40,7 @@ object DataTypePersistence {
     val elem = XML.loadFile(filePath.toFile(rootDirectory))
     new DataType(filePath,
       elem.childElemTextOption("name").get,
-      elem.childElemTextOption("description").getOrElse(""),
+      elem.childElemTextOption("description"),
       (elem \ "assimilations" \ "assimilation").toElemSeq.map {
         e => AssimilationReference(
             e.childElemTextOption("name"),
@@ -92,6 +92,6 @@ object ModelPesistence {
     model.assimilations.filter(!_.isDirect).foreach(a => FileUtils.writeStringToFile(a.filePath.toFile(directory), xmlPrettyPrint(AssimilationPersistence.toXml(a))))
   }
   def readDirectory(directory: File): Model = new Model(
-    DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)),
-    AssimilationPersistence.files(directory).map(f => AssimilationPersistence.fromFile(f.relativeTo(directory), directory)))
+    DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)).toSet,
+    AssimilationPersistence.files(directory).map(f => AssimilationPersistence.fromFile(f.relativeTo(directory), directory)).toSet)
 }

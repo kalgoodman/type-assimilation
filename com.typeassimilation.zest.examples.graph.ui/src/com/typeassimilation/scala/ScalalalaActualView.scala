@@ -6,7 +6,6 @@ import com.google.inject.util.Modules
 import org.eclipse.gef4.zest.fx.ZestFxModule
 import org.eclipse.gef4.zest.fx.ui.ZestFxUiModule
 import com.typeassimilation.model.Model
-import com.typeassimilation.model.ModelPart
 import scala.collection.mutable
 import collection.JavaConversions._
 import org.eclipse.gef4.graph.{ Edge, Node, Graph }
@@ -33,8 +32,7 @@ class ScalalalaActualView extends ZestFxUiView(Guice.createInjector(Modules.`ove
   val typeNameToNodeMap = mutable.Map.empty[String, Node]
   def toNode(dt: DataType) = {
     val node = new Node
-    ZestProperties.setLabel(node, dt.name())
-    dt.name.onChange(ZestProperties.setLabel(node, dt.name()))
+    ZestProperties.setLabel(node, dt.name)
     node
   }
   def toMultiEdge(a: Assimilation): MultiEdge = {
@@ -53,30 +51,6 @@ class ScalalalaActualView extends ZestFxUiView(Guice.createInjector(Modules.`ove
       ZestProperties.GRAPH_LAYOUT -> new SpringLayoutAlgorithm)
     new Graph(graphAttributes, nodes.toSeq ++ edges.map(_.node), edges.flatMap(_.edges).toSeq)
   }
-  model.dataTypes.onChange {
-    (current, change) =>
-      change match {
-        case ObservableSet.Add(added) =>
-          val node = toNode(added)
-          typeNameToNodeMap += added.name() -> node
-          graph.getNodes.add(node)
-        case ObservableSet.Remove(removed) =>
-          graph.getNodes.remove(typeNameToNodeMap.remove(removed.name()).get)
-      }
-  }
-  model.assimilations.onChange {
-    (current, change) =>
-      change match {
-        case ObservableSet.Add(added) =>
-          val multiEdge = toMultiEdge(added)
-//          assimilationNameToEdgeMap += added.name() -> multiEdge
-          graph.getNodes.add(multiEdge.node)
-          graph.getEdges.addAll(multiEdge.edges)
-        case ObservableSet.Remove(removed) =>
-//          val removedMultiEdge = assimilationNameToEdgeMap.remove(removed.name()).get
-//          graph.getNodes.remove(removedMultiEdge.node)
-//          graph.getEdges.removeAll(removedMultiEdge.edges)
-      }
-  }
+
   setGraph(graph)
 }
