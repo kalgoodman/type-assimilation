@@ -179,7 +179,7 @@ object RelationalRenderer {
     RelationalModel(model.rootDataTypes.flatMap(dt => toTableFromDataType(JoinedAssimilationPath(dt)).toSet).toSet)
   }
 
-  def toPresetColumn(currentTable: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Column = {
+  def toPrimitiveColumn(currentTable: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Column = {
     def column(columnType: ColumnType, suffix: String = "") = Column(
       name = config.namingPolicy.toColumnName(currentTable.assimilationPath, assimilationPath),
       description = config.namingPolicy.toColumnDescription(currentTable.assimilationPath, assimilationPath),
@@ -187,18 +187,18 @@ object RelationalRenderer {
       isPrimaryKey = false,
       assimilationPath = assimilationPath)
     import Preset.DataType._
-    assimilationPath.tipAssimilation match {
-      case Identifier.directAssimilation => column(ColumnType.VariableCharacter(config.identifierLength))
-      case DateTime.directAssimilation => column(ColumnType.DateTime)
-      case Date.directAssimilation => column(ColumnType.Date)
-      case IntegralNumber.directAssimilation => column(ColumnType.Integer)
-      case DecimalNumber.directAssimilation => column(ColumnType.Number(10, 5))
-      case Boolean.directAssimilation => column(ColumnType.FixedCharacter(1))
-      case Code2.directAssimilation => column(ColumnType.FixedCharacter(2))
-      case Code3.directAssimilation => column(ColumnType.FixedCharacter(3))
-      case TextBlock.directAssimilation => column(ColumnType.VariableCharacter(500))
-      case ShortName.directAssimilation => column(ColumnType.VariableCharacter(50))
-      case LongName.directAssimilation => column(ColumnType.VariableCharacter(100))
+    assimilationPath.singleTipDataType match {
+      case Identifier => column(ColumnType.VariableCharacter(config.identifierLength))
+      case DateTime => column(ColumnType.DateTime)
+      case Date => column(ColumnType.Date)
+      case IntegralNumber => column(ColumnType.Integer)
+      case DecimalNumber => column(ColumnType.Number(10, 5))
+      case Boolean => column(ColumnType.FixedCharacter(1))
+      case Code2 => column(ColumnType.FixedCharacter(2))
+      case Code3 => column(ColumnType.FixedCharacter(3))
+      case TextBlock => column(ColumnType.VariableCharacter(500))
+      case ShortName => column(ColumnType.VariableCharacter(50))
+      case LongName => column(ColumnType.VariableCharacter(100))
       case x => throw new IllegalArgumentException(s"${x.filePath} is not accounted for...")
     }
   }
@@ -251,12 +251,12 @@ object RelationalRenderer {
   }
 
   def toTableFromAssimilationReference(assimilationPath: JoinedAssimilationPath[AssimilationReference], parent: TableInformation)(implicit config: Config, model: Model): TableSet = {
-    if (assimilationPath.tipAssimilation.isPreset) {
+    if (assimilationPath.tipAssimilation.dataTypeReferences.size == 1 && assimilationPath.tipAssimilation.singleDataType.primitive) {
       val ti = TableInformation(Some(parent), assimilationPath)
       TableSet(Table(
         name = ti.name,
         description = config.namingPolicy.toTableDescription(ti.assimilationPath),
-        columns = ti.primaryKeys ++ parent.foreignKeys :+ toPresetColumn(ti, assimilationPath),
+        columns = ti.primaryKeys ++ parent.foreignKeys :+ toPrimitiveColumn(ti, assimilationPath),
         assimilationPath = assimilationPath), Set())
     } else if (assimilationPath.tipDataTypes.size == 1) toTableFromDataType(assimilationPath + assimilationPath.singleTipDataType, Some(parent))
     else if (assimilationPath.tipDataTypes.size > 1) {

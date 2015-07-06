@@ -14,10 +14,12 @@ import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
 
-case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilationReferences: Seq[AssimilationReference]) {
-  def isPreset = false
+case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilationReferences: Seq[AssimilationReference], definedOrientating: Boolean = false) {
+  def orientating(implicit model: Model) = definedOrientating || ???
+  def preset = false
+  def primitive = false
   def reference = DataTypeReference(filePath)
-  lazy val directAssimilation = new Assimilation(filePath, None, None, Seq(reference), isPreset) { override val isDirect = true }
+  lazy val directAssimilation = new Assimilation(filePath, None, None, Seq(reference)) { override val isDirect = true }
 }
 
 case class DataTypeReference(filePath: FilePath)
@@ -36,7 +38,10 @@ object Preset {
     private val presetDataTypes = mutable.Set.empty[DataType]
     private def presetPath(name: String) = RootFilePath + name.asRelative
     private def presetDataType(name: String, description: String) = {
-      val dt = new DataType(presetPath(name), name, Some(description), Seq()) { override val isPreset = true }
+      val dt = new DataType(presetPath(name), name, Some(description), Seq()) { 
+        override val preset = true
+        override val primitive = true
+      }
       presetDataTypes += dt
       dt
     }
@@ -57,7 +62,9 @@ object Preset {
       val name = "MONEY"
       val dt = new DataType(presetPath(name), name, Some("The preset monetary amount type."), Seq(
         assimilationReference("Amount", "The value of the monetary amount - i.e. The number without the currency.", DecimalNumber.filePath),
-        assimilationReference("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)))
+        assimilationReference("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath))) {
+        override val preset = true
+      }
       presetDataTypes += dt
       dt
     }
@@ -65,7 +72,7 @@ object Preset {
   }
 }
 
-class Assimilation(val filePath: FilePath.Absolute, val name: Option[String], val description: Option[String], initialDataTypes: Seq[DataTypeReference], val isPreset: Boolean) {
+class Assimilation(val filePath: FilePath.Absolute, val name: Option[String], val description: Option[String], initialDataTypes: Seq[DataTypeReference]) {
   val dataTypeReferences = ObservableBuffer(initialDataTypes)
   val isDirect = false
   def isSingular = dataTypeReferences.size == 1
@@ -79,6 +86,7 @@ case class JoinedAssimilationPath[T](assimilationPaths: Set[AssimilationPath[T]]
   def tipDataType = delegateTipAssimilationPath.tipDataType
   def tipAssimilation(implicit model: Model) = delegateTipAssimilationPath.tipAssimilation
   def tipDataTypes(implicit model: Model) = delegateTipAssimilationPath.tipDataTypes
+  def withSingleTipDataType(implicit model: Model) = copy(assimilationPaths = assimilationPaths.map(_.withSingleTipDataType))
   def singleTipDataType(implicit model: Model) = delegateTipAssimilationPath.singleTipDataType
   // These 2 probably need rework...
   def tipName = delegateTipAssimilationPath.tipName
@@ -154,6 +162,7 @@ case class AssimilationPath[T](assimilationReferences: Seq[AbsoluteAssimilationR
     case Right(assimilationReference) => assimilationReference.assimilationReference.description
   }
   def tipDataTypes(implicit model: Model) = tipAssimilation.dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath.toAbsoluteUsingBase(tipAssimilation.filePath.parent.get)))
+  def withSingleTipDataType(implicit model: Model) = this + singleTipDataType
   def singleTipDataType(implicit model: Model) = tipDataTypes.head
   def relativeTo(parentAssimilationPath: AssimilationPath[_]): RelativeAssimilationPath[T] =
     if (!isChildOf(parentAssimilationPath)) throw new IllegalStateException(s"The path $parentAssimilationPath is not a root path of $this.")
@@ -184,7 +193,7 @@ class Model(definedDataTypes: Set[DataType], definedAssimilations: Set[Assimilat
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   val assimilations = definedAssimilations ++ dataTypes.map(_.directAssimilation) 
   def assimilationOption(filePath: FilePath.Absolute) = assimilations.find(_.filePath == filePath)
-  def rootDataTypes = dataTypes.filter(dt => dt.referencedSelfAssimilations.isEmpty && !dt.isPreset)
+  def rootDataTypes = dataTypes.filter(dt => dt.referencedSelfAssimilations.isEmpty && !dt.preset)
 }
 
 class EnhancedDataType(dataType: DataType) {

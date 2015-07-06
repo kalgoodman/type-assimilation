@@ -77,8 +77,7 @@ object AssimilationPersistence {
     new Assimilation(filePath,
       elem.childElemTextOption("name"),
       elem.childElemTextOption("description"),
-      (elem \ "types" \ "file-path").toElemSeq.map(e => new DataTypeReference(FilePath(e.text))),
-      false)
+      (elem \ "types" \ "file-path").toElemSeq.map(e => new DataTypeReference(FilePath(e.text))))
   }
 }
 
