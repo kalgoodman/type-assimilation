@@ -17,6 +17,7 @@ object DataTypePersistence {
     <type>
       <name>{ dataType.name }</name>
       { if (dataType.description.isDefined) <description>{ dataType.description }</description> }
+      { if (dataType.definedOrientating) <orientating>true</orientating> }
       {
         if (!dataType.assimilationReferences.isEmpty) {
           <assimilations>
@@ -57,7 +58,9 @@ object DataTypePersistence {
             },
             e.childElemTextOption("multiple-occurrence-name")
        )
-      })
+      },
+      elem.childElemTextOption("orientating").map(_.toBoolean).getOrElse(false)
+    )
   }
 }
 
