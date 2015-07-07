@@ -44,7 +44,7 @@ class ScalalalaActualView extends ZestFxUiView(Guice.createInjector(Modules.`ove
   val graph = {
     val nodes = model.dataTypes.map(toNode(_))
     typeNameToNodeMap ++= nodes.map(n => name(n) -> n).toMap
-    val edges = model.assimilations.map(toMultiEdge(_))
+    val edges = model.dataTypes.flatMap(_.assimilations).map(toMultiEdge(_))
     assimilationNameToEdgeMap ++= edges.map(me => name(me.node) -> me)
     val graphAttributes = Map(
       ZestProperties.GRAPH_TYPE -> ZestProperties.GRAPH_TYPE_DIRECTED,
