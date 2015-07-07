@@ -47,7 +47,7 @@ object RelationalRenderer {
         def mergeColumns(c1: Column, c2: Column) = {
           val mergedColumnAssimilationPath = c1.assimilationPath + c2.assimilationPath
           c1.copy(
-            name = config.namingPolicy.toColumnName(mergedTableInformation.assimilationPath, mergedColumnAssimilationPath, c1.repeatIndex),
+            name = config.namingPolicy.toColumnName(mergedTableInformation, mergedColumnAssimilationPath, c1.repeatIndex, c1.enumeration),
             description = config.namingPolicy.toColumnDescription(mergedTableInformation.assimilationPath, mergedColumnAssimilationPath),
             assimilationPath = mergedColumnAssimilationPath,
             enumeration = c1.enumeration.map(e1 => toEnumeration(e1.assimilationPath + c2.enumeration.get.assimilationPath)))
@@ -141,7 +141,7 @@ object RelationalRenderer {
     def toTableName(parentTableInformation: Option[TableInformation], assimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): String
     def toTableDescription(assimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Option[String]
     def toForeignKeyDescription(primaryKeyColumn: Column)(implicit config: Config, model: Model): String
-    def toColumnName(tableAssimilationPath: JoinedAssimilationPath[_], columnAssimilationPath: JoinedAssimilationPath[_], repeatIndex: Option[Int] = None, enumeration: Option[Enumeration] = None)(implicit config: Config, model: Model): String
+    def toColumnName(tableInformation: TableInformation, columnAssimilationPath: JoinedAssimilationPath[_], repeatIndex: Option[Int] = None, enumeration: Option[Enumeration] = None)(implicit config: Config, model: Model): String
     def toColumnDescription(tableAssimilationPath: JoinedAssimilationPath[_], columnAssimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Option[String]
     def toEnumerationName(assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): String
     def toEnumerationDesciption(assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Option[String]
@@ -181,16 +181,14 @@ object RelationalRenderer {
       }
       def toTableDescription(assimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
       def toForeignKeyDescription(primaryKeyColumn: Column)(implicit config: Config, model: Model): String = s"Foreign key to ${primaryKeyColumn.description}"
-      def toColumnName(tableAssimilationPath: JoinedAssimilationPath[_], columnAssimilationPath: JoinedAssimilationPath[_], repeatIndex: Option[Int] = None, enumeration: Option[Enumeration] = None)(implicit config: Config, model: Model): String = {
+      def toColumnName(tableInformation: TableInformation, columnAssimilationPath: JoinedAssimilationPath[_], repeatIndex: Option[Int] = None, enumeration: Option[Enumeration] = None)(implicit config: Config, model: Model): String = {
         val cleansed = cleanAndUpperCase({
-          if (tableAssimilationPath == columnAssimilationPath) columnAssimilationPath.tipName
-          else {
-            val relative = columnAssimilationPath.relativeTo(tableAssimilationPath)
-            val common = relative.assimilationPath.commonAssimilationReferences
-            val joined = (if (!relative.startOnAssimilationReference) common.head.dataType.name else "") + " " + common.flatMap(_.assimilationReference.name).mkString(" ")
-            if (joined.trim.isEmpty) columnAssimilationPath.tipName + (if (enumeration.isDefined) " Type Code" else "") else joined
+          if (tableInformation.assimilationPath == columnAssimilationPath) toTableName(tableInformation.parentTableInformation, tableInformation.assimilationPath)
+          else toName(Some(tableInformation.assimilationPath), columnAssimilationPath) match {
+            case "" => toTableName(tableInformation.parentTableInformation, tableInformation.assimilationPath)
+            case x => x
           }
-        })
+        } + (if (enumeration.isDefined) " Type Code" else ""))
         cleansed + (repeatIndex match {
           case Some(index) => s"_$index"
           case None => ""
@@ -210,7 +208,7 @@ object RelationalRenderer {
 
   def toPrimitiveColumn(currentTable: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): Column = {
     def column(columnType: ColumnType, suffix: String = "") = Column(
-      name = config.namingPolicy.toColumnName(currentTable.assimilationPath, assimilationPath),
+      name = config.namingPolicy.toColumnName(currentTable, assimilationPath),
       description = config.namingPolicy.toColumnDescription(currentTable.assimilationPath, assimilationPath),
       `type` = columnType,
       isPrimaryKey = false,
@@ -246,19 +244,19 @@ object RelationalRenderer {
   }
 
   def isNonGeneratedColumn(parent: TableInformation, c: Column)(implicit config: Config, model: Model) = !c.isPrimaryKey && c.foreignKeyReference.map(_.tableName != parent.name).getOrElse(true)
-  def consumeColumns(parentAssimilationPath: JoinedAssimilationPath[_], cs: Seq[Column])(implicit config: Config, model: Model) = cs.map(c => c.copy(name = config.namingPolicy.toColumnName(parentAssimilationPath, c.assimilationPath, c.repeatIndex)))
+  def consumeColumns(parentTableInformation: TableInformation, cs: Seq[Column])(implicit config: Config, model: Model) = cs.map(c => c.copy(name = config.namingPolicy.toColumnName(parentTableInformation, c.assimilationPath, c.repeatIndex, c.enumeration)))
 
   def columnsAndChildTables(currentTableInformation: TableInformation, assimilationPath: JoinedAssimilationPath[AssimilationReference])(implicit config: Config, model: Model): (Seq[Column], Set[TableSet]) = {
     val tableSet = toTableFromAssimilationReference(assimilationPath, currentTableInformation)
     val (columns, childTables) = tableSet.migrateHeadColumnsTo(currentTableInformation)
-    val comsumedColumns = consumeColumns(currentTableInformation.assimilationPath, columns.filter(c => isNonGeneratedColumn(currentTableInformation, c)))
+    val comsumedColumns = consumeColumns(currentTableInformation, columns.filter(c => isNonGeneratedColumn(currentTableInformation, c)))
     assimilationPath.tipAssimilationReference.assimilationReference.maximumOccurences match {
       case Some(maxOccurs) =>
         if (maxOccurs > 1 && maxOccurs <= config.maximumOccurencesTableLimit && tableSet.childTableSets.isEmpty)
           (for {
             i <- (1 to (maxOccurs))
             c <- comsumedColumns
-          } yield c.copy(name = config.namingPolicy.toColumnName(currentTableInformation.assimilationPath, c.assimilationPath, Some(i)), repeatIndex = Some(i)), Set())
+          } yield c.copy(name = config.namingPolicy.toColumnName(currentTableInformation, c.assimilationPath, Some(i), c.enumeration), repeatIndex = Some(i)), Set())
         else if (maxOccurs == 1) (comsumedColumns, childTables)
         else (Seq(), Set(tableSet))
       case None =>
@@ -294,7 +292,7 @@ object RelationalRenderer {
         case ((fcs, fts), ts) =>
           if (!config.maximumSubTypeColumnsBeforeSplittingOut.isDefined || ts.table.columns.filter(c => isNonGeneratedColumn(subTypeParent, c)).size <= config.maximumSubTypeColumnsBeforeSplittingOut.get) {
             val (columns, migratedChildTables) = ts.migrateHeadColumnsTo(subTypeParent)
-            (fcs ++ consumeColumns(assimilationPath, columns.filter(c => isNonGeneratedColumn(subTypeParent, c))), fts ++ migratedChildTables)
+            (fcs ++ consumeColumns(subTypeParent, columns.filter(c => isNonGeneratedColumn(subTypeParent, c))), fts ++ migratedChildTables)
           } else (fcs, fts + ts)
       }
       val e = toEnumeration(assimilationPath)
@@ -304,7 +302,7 @@ object RelationalRenderer {
         columns = subTypeParent.primaryKeys ++ parent.foreignKeys ++
           {
             Column(
-              name = config.namingPolicy.toColumnName(subTypeParent.assimilationPath, assimilationPath, None, Some(e)),
+              name = config.namingPolicy.toColumnName(subTypeParent, assimilationPath, None, Some(e)),
               description = assimilationPath.tipAssimilationReference.assimilationReference.description,
               `type` = ColumnType.VariableCharacter(e.maximumValueSize),
               enumeration = Some(e),
