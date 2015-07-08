@@ -14,15 +14,16 @@ import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
 
-case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedOrientating: Boolean = false) {
+case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedOrientating: Boolean) {
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
   def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeFilePaths.contains(filePath))
   def orientating(implicit model: Model) = definedOrientating || model.orientatingDataTypes.contains(this)
+  def identifyingAssimilations = assimilations.filter(_.identifying)
   def preset = false
   def primitive = false
 }
 
-case class Assimilation(name: Option[String], description: Option[String], dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
+case class Assimilation(name: Option[String], description: Option[String], identifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
   def absoluteDataTypeFilePaths(dataType: DataType) = dataTypeFilePaths.map(_.toAbsoluteUsingBase(dataType.filePath.parent.get)) 
   override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeFilePaths.mkString(" ,")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
 }
@@ -57,7 +58,7 @@ object Preset {
     val TextBlock = presetDataType("TEXTBLOCK", "The preset block of text type.")
     val ShortName = presetDataType("SHORTNAME", "The preset short name type.")
     val LongName = presetDataType("LONGNAME", "The preset long name type.")
-    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), Seq(filePath), Some(1), Some(1), None)
+    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(filePath), Some(1), Some(1), None)
     val Money = {
       val name = "MONEY"
       val dt = new DataType(presetPath(name), name, Some("The preset monetary amount type."), Seq(
@@ -85,7 +86,9 @@ case class JoinedAssimilationPath[T](assimilationPaths: Set[AssimilationPath[T]]
   // These 2 probably need rework...
   def tipName = delegateTipAssimilationPath.tipName
   def tipDescription = delegateTipAssimilationPath.tipDescription
-
+  def asDataType = this.asInstanceOf[JoinedAssimilationPath[DataType]]
+  def asAssimilation = this.asInstanceOf[JoinedAssimilationPath[Assimilation]]
+  
   def +(assimilationPath: AssimilationPath[T]) = if (assimilationPath.tip == tip) copy(assimilationPaths = assimilationPaths + assimilationPath) else throw new IllegalStateException(s"Tips are inconsistent.")
   def +(joinedAssimilationPath: JoinedAssimilationPath[_]) = if (joinedAssimilationPath.tip == tip) copy(assimilationPaths = assimilationPaths ++ joinedAssimilationPath.asInstanceOf[JoinedAssimilationPath[T]].assimilationPaths) else throw new IllegalStateException(s"Tips are inconsistent.")
   def +(assimilation: Assimilation): JoinedAssimilationPath[Assimilation] = copy(assimilationPaths = assimilationPaths.map(_ + assimilation))

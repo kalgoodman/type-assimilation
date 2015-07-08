@@ -27,6 +27,7 @@ object DataTypePersistence {
                   <assimilation>
                     { if (a.name.isDefined) <name>{ a.name.get }</name> }
                     { if (a.description.isDefined) <description>{ a.description.get }</description> }
+                    { if (a.identifying) <identifying>true</identifying> }
                     <types>
 											{ a.dataTypeFilePaths.map(dtfp => <file-path>{ dtfp }</file-path>) }
 										</types>
@@ -54,6 +55,7 @@ object DataTypePersistence {
         e => Assimilation(
             e.childElemTextOption("name"),
             e.childElemTextOption("description"),
+            e.childElemTextOption("identifying").map(_.toBoolean).getOrElse(false),
             (e \ "types" \ "file-path").toElemSeq.map(fpe => FilePath(fpe.text)),
             e.childElemTextOption("minimum-occurrence") match {
               case None => Some(0)
