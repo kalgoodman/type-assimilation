@@ -14,16 +14,16 @@ import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
 
-case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedOrientating: Boolean) {
+case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedAsOrientating: Boolean) {
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
   def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeFilePaths.contains(filePath))
-  def orientating(implicit model: Model) = definedOrientating || model.orientatingDataTypes.contains(this)
-  def identifyingAssimilations = assimilations.filter(_.identifying)
+  def isOrientating(implicit model: Model) = definedAsOrientating || model.orientatingDataTypes.contains(this)
+  def identifyingAssimilations = assimilations.filter(_.isIdentifying)
   def preset = false
   def primitive = false
 }
 
-case class Assimilation(name: Option[String], description: Option[String], identifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
+case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
   def absoluteDataTypeFilePaths(dataType: DataType) = dataTypeFilePaths.map(_.toAbsoluteUsingBase(dataType.filePath.parent.get)) 
   override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeFilePaths.mkString(" ,")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
 }
@@ -166,7 +166,7 @@ case class AssimilationPath[T](assimilations: Seq[AbsoluteAssimilation], tipData
   def isChildOf(assimilationPath: AssimilationPath[_]) = assimilations.startsWith(assimilationPath.assimilations) && (!assimilationPath.tipDataTypeOption.isDefined || assimilations(assimilationPath.assimilations.size).dataType == assimilationPath.tipDataTypeOption.get)
   def isReferenceToOrientatingDataType(implicit model: Model) = tipDataTypeOption match {
       case None => false
-      case Some(dataType) => dataType.orientating && !assimilations.isEmpty
+      case Some(dataType) => dataType.isOrientating && !assimilations.isEmpty
   }
   override def toString = {
     def descriptor(dataType: DataType) = s"${dataType.name} (${dataType.filePath})"
@@ -185,7 +185,7 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   lazy val orientatingDataTypes = {
     val initialOrientatingDataTypes = {
-      val defined = dataTypes.filter(_.definedOrientating)
+      val defined = dataTypes.filter(_.definedAsOrientating)
       val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeFilePaths(dt)).find(_ == dt.filePath).isDefined)
       rootDataTypes ++ defined ++ selfLooping
     }

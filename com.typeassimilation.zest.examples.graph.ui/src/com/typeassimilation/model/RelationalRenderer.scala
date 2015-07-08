@@ -27,7 +27,7 @@ object RelationalRenderer {
   }
   case class TableSet(table: Table, childTableSets: Set[TableSet]) {
     def toSet: Set[Table] = childTableSets.flatMap(_.toSet) + table
-    def isMergeableWith(other: TableSet) = table.foreignKeys == other.table.foreignKeys &&
+    def isMergeableWith(other: TableSet) = table.foreignKeys.map(fk => (fk.name, fk.`type`, fk.foreignKeyReference)) == other.table.foreignKeys.map(fk => (fk.name, fk.`type`, fk.foreignKeyReference)) &&
       table.assimilationPath.tip == other.table.assimilationPath.tip &&
       table.assimilationPath.parents.size == 1 && other.table.assimilationPath.parents.size == 1 &&
       table.assimilationPath.parents.head.tip == other.table.assimilationPath.parents.head.tip
@@ -48,6 +48,8 @@ object RelationalRenderer {
           c1.copy(
             name = config.namingPolicy.toColumnName(mergedTableInformation, mergedColumnAssimilationPath, c1.repeatIndex, c1.enumeration),
             description = config.namingPolicy.toColumnDescription(mergedTableInformation.assimilationPath, mergedColumnAssimilationPath),
+            isGenerated = c1.isGenerated,
+            isNullable = c1.isNullable,
             assimilationPath = mergedColumnAssimilationPath,
             enumeration = c1.enumeration.map(e1 => toEnumeration(e1.assimilationPath + c2.enumeration.get.assimilationPath)))
         }
@@ -61,8 +63,8 @@ object RelationalRenderer {
               description = config.namingPolicy.toTableDescription(mergedTableInformation.assimilationPath),
               columns =
                 mergedTableInformation.primaryKeys ++
-                  pti.toSeq.flatMap(_.foreignKeys(mergedTableInformation.primaryKeys)) ++
-                  ts1.table.nonKeyColumns.map(c => mergeColumns(c, ts2.table.column(c.name).get)),
+                  pti.toSeq.flatMap(_.foreignKeys(mergedTableInformation.assimilationPath, mergedTableInformation.primaryKeys)) ++
+                  ts1.table.nonKeyColumns.map(c => mergeColumns(c, ts2.table.column(c.name).get)), 
               assimilationPath = mergedTableInformation.assimilationPath)
           },
           childTableSets = {
@@ -77,11 +79,12 @@ object RelationalRenderer {
       childTableSets.map(ts => ts.copy(table = ts.table.copy(
         name = config.namingPolicy.toTableName(Some(newParent), ts.table.assimilationPath),
         columns = {
-          val previousParentKeysWerePrimaryKeys = ts.table.columns.filter(c => c.foreignKeyReference.isDefined && c.foreignKeyReference.get.tableName == table.name).head.isPrimaryKey
+          val previousParentKeysHead = ts.table.columns.filter(c => c.foreignKeyReference.isDefined && c.foreignKeyReference.get.tableName == table.name).head
+          val previousParentAssimilationPath = previousParentKeysHead.assimilationPath
           val columnsWithRemovedPreviousParent = ts.table.columns.filterNot(c => c.foreignKeyReference.isDefined && c.foreignKeyReference.get.tableName == table.name)
           val keys = columnsWithRemovedPreviousParent.filter(_.isPrimaryKey) match {
-            case pks if pks.isEmpty => newParent.primaryForeignKeys
-            case pks => if (previousParentKeysWerePrimaryKeys) newParent.primaryForeignKeys ++ pks else pks ++ newParent.foreignKeys()
+            case pks if pks.isEmpty => newParent.primaryForeignKeys(previousParentAssimilationPath)
+            case pks => if (previousParentKeysHead.isPrimaryKey) newParent.primaryForeignKeys(previousParentAssimilationPath) ++ pks else pks ++ newParent.foreignKeys(previousParentAssimilationPath)
           }
           keys ++ columnsWithRemovedPreviousParent.filter(!_.isPrimaryKey)
         }))))
@@ -101,13 +104,13 @@ object RelationalRenderer {
     }
     override def toString = name + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath] {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
   }
-  case class Column(name: String, description: Option[String], `type`: ColumnType, assimilationPath: JoinedAssimilationPath[_], isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None, repeatIndex: Option[Int] = None) {
+  case class Column(name: String, description: Option[String], `type`: ColumnType, isGenerated: Boolean, isNullable: Boolean, assimilationPath: JoinedAssimilationPath[_], isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None, repeatIndex: Option[Int] = None) {
     override def toString = s"$name " + `type`.toString + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
       if (isPrimaryKey && foreignKeyReference.isEmpty) "(PK)"
       else if (!isPrimaryKey && foreignKeyReference.isDefined) "(FK -> " + foreignKeyReference.get + ")"
       else if (isPrimaryKey && foreignKeyReference.isDefined) "(PFK -> " + foreignKeyReference.get + ")"
       else ""
-    } + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath]"
+    } + (if(isNullable) " NULL" else " NOT NULL") + (if(isGenerated) " <GENERATED>" else "") + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath]"
     def toForeignKeyReference(tableName: String) = ColumnReference(tableName, name)
   }
   case class ColumnReference(tableName: String, columnName: String) {
@@ -208,14 +211,14 @@ object RelationalRenderer {
   object PrimaryKeyCreationPolicy {
     object SurrogateKeyGeneration extends PrimaryKeyCreationPolicy {
       def primaryKeys(parentTableInformation: Option[TableInformation], tableName: String, tableAssimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Seq[Column] = {
-        Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), ColumnType.Number(15, 0), tableAssimilationPath, true))
+        Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system isGenerated) for the ${tableName} table."), ColumnType.Number(15, 0), true, false, tableAssimilationPath, true))
       }
       def nonPrimaryKeyAssimilations(dataType: DataType): Seq[Assimilation] = dataType.assimilations
       def finalTableSetsFilter(tableSets: Set[TableSet]): Set[TableSet] = tableSets
     }
-    case class NaturalKey(generatedIdentifierSuffix: String = "_ID") extends PrimaryKeyCreationPolicy {
+    case class NaturalKey(isGeneratedIdentifierSuffix: String = "_ID") extends PrimaryKeyCreationPolicy {
       def primaryKeys(parentTableInformation: Option[TableInformation], tableName: String, tableAssimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model): Seq[Column] = {
-        def generatePrimaryKey = parentTableInformation.toSeq.flatMap(_.primaryForeignKeys) ++ Seq(Column(tableName + generatedIdentifierSuffix, Some(s"The unique identifier for the ${tableAssimilationPath.tipName}."), ColumnType.Number(15, 0), tableAssimilationPath, true))
+        def generatePrimaryKey = parentTableInformation.toSeq.flatMap(_.primaryForeignKeys(tableAssimilationPath)) ++ Seq(Column(tableName + isGeneratedIdentifierSuffix, Some(s"The unique identifier for the ${tableAssimilationPath.tipName}."), ColumnType.Number(15, 0), true, false, tableAssimilationPath, true))
         tableAssimilationPath.tip match {
           case Left(dataType) => if (dataType.identifyingAssimilations.isEmpty) generatePrimaryKey else {
             val identifyingAssimilation = dataType.identifyingAssimilations.head
@@ -230,7 +233,7 @@ object RelationalRenderer {
       }
       def nonPrimaryKeyAssimilations(dataType: DataType): Seq[Assimilation] =
         if (dataType.identifyingAssimilations.size > 1) throw new IllegalStateException(s"The Natural Key primary key policy only supports data types with a single identifying assimilation, ${dataType.filePath} does not.")
-        else dataType.assimilations.filterNot(_.identifying)
+        else dataType.assimilations.filterNot(_.isIdentifying)
       def finalTableSetsFilter(tableSets: Set[TableSet]): Set[TableSet] = {
         def removePrimaryKeysIfNoChildTables(tableSet: TableSet): TableSet = if (tableSet.childTableSets.isEmpty) {
           if (tableSet.table.primaryKeys.size > tableSet.table.primaryForeignKeys.size) {
@@ -254,12 +257,16 @@ object RelationalRenderer {
       model.orientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt)))).flatMap(_.toSet))
   }
 
+  def isNullable(assimilation: Assimilation): Boolean = assimilation.minimumOccurences.getOrElse(0) == 0
+  
   def toPrimitiveColumn(currentTable: TableInformation, assimilationPath: JoinedAssimilationPath[Assimilation])(implicit config: Config, model: Model): Column = {
     def column(columnType: ColumnType, suffix: String = "") = Column(
       name = config.namingPolicy.toColumnName(currentTable, assimilationPath),
       description = config.namingPolicy.toColumnDescription(currentTable.assimilationPath, assimilationPath),
       `type` = columnType,
       isPrimaryKey = false,
+      isGenerated = false,
+      isNullable = isNullable(assimilationPath.tipAssimilation.assimilation),
       assimilationPath = assimilationPath)
     import Preset.DataType._
     assimilationPath.singleTipDataType match {
@@ -281,19 +288,24 @@ object RelationalRenderer {
   case class TableInformation(parentTableInformation: Option[TableInformation], assimilationPath: JoinedAssimilationPath[_], explicitPrimaryKeys: Seq[Column] = Seq()) {
     def name(implicit config: Config, model: Model) = config.namingPolicy.toTableName(parentTableInformation, assimilationPath)
     def primaryKeys(implicit config: Config, model: Model) = if (explicitPrimaryKeys.isEmpty) config.primaryKeyCreationPolicy.primaryKeys(parentTableInformation, name, assimilationPath) else explicitPrimaryKeys
-    def foreignKeys(currentPrimaryKeys: Seq[Column] = Seq())(implicit config: Config, model: Model) =
+    def foreignKeys(referencingAssimilationPath: JoinedAssimilationPath[_], currentPrimaryKeys: Seq[Column] = Seq())(implicit config: Config, model: Model) =
       if (currentPrimaryKeys.flatMap(_.foreignKeyReference).containsSlice(primaryKeys.map(_.toForeignKeyReference(name)))) Seq()
       else primaryKeys.map(pk => Column(
         name = pk.name,
         description = Some(config.namingPolicy.toForeignKeyDescription(pk)),
         `type` = pk.`type`,
-        pk.assimilationPath, // Hmmm... Not sure what should be here
+        isGenerated = pk.isGenerated,
+        isNullable = false,
+        assimilationPath = referencingAssimilationPath,
         foreignKeyReference = Some(pk.toForeignKeyReference(name))))
-    def primaryForeignKeys(implicit config: Config, model: Model) = foreignKeys().map(_.copy(isPrimaryKey = true))
+    def primaryForeignKeys(referencingAssimilationPath: JoinedAssimilationPath[_])(implicit config: Config, model: Model) = foreignKeys(referencingAssimilationPath).map(_.copy(isPrimaryKey = true))
   }
 
   def isNonGeneratedColumn(parent: TableInformation, c: Column)(implicit config: Config, model: Model) = !c.isPrimaryKey && c.foreignKeyReference.map(_.tableName != parent.name).getOrElse(true)
-  def consumeColumns(parentTableInformation: TableInformation, cs: Seq[Column])(implicit config: Config, model: Model) = cs.map(c => c.copy(name = config.namingPolicy.toColumnName(parentTableInformation, c.assimilationPath, c.repeatIndex, c.enumeration)))
+  def consumeColumns(parentTableInformation: TableInformation, cs: Seq[Column])(implicit config: Config, model: Model) = cs.map(c => c.copy(
+      name = config.namingPolicy.toColumnName(parentTableInformation, c.assimilationPath, c.repeatIndex, c.enumeration),
+      isNullable = isNullable(c.assimilationPath.relativeTo(parentTableInformation.assimilationPath).assimilationPath.commonAssimilations.head.assimilation)    
+  ))
 
   def columnsAndChildTables(currentTableInformation: TableInformation, assimilationPath: JoinedAssimilationPath[Assimilation])(implicit config: Config, model: Model): (Seq[Column], Set[TableSet]) = {
     val tableSet = toTableFromAssimilation(assimilationPath, currentTableInformation)
@@ -332,7 +344,7 @@ object RelationalRenderer {
       TableSet(Table(
         name = ti.name,
         description = config.namingPolicy.toTableDescription(ti.assimilationPath),
-        columns = ti.primaryKeys ++ parent.foreignKeys(ti.primaryKeys) :+ toPrimitiveColumn(ti, assimilationPath),
+        columns = ti.primaryKeys ++ parent.foreignKeys(assimilationPath, ti.primaryKeys) :+ toPrimitiveColumn(ti, assimilationPath),
         assimilationPath = assimilationPath), Set())
     } else if (assimilationPath.tipDataTypes.size == 1) toTableFromDataTypeOrReference(assimilationPath + assimilationPath.singleTipDataType, Some(parent))
     else if (assimilationPath.tipDataTypes.size > 1) {
@@ -348,13 +360,15 @@ object RelationalRenderer {
       TableSet(Table(
         name = subTypeParent.name,
         description = config.namingPolicy.toTableDescription(subTypeParent.assimilationPath),
-        columns = subTypeParent.primaryKeys ++ parent.foreignKeys(subTypeParent.primaryKeys) ++
+        columns = subTypeParent.primaryKeys ++ parent.foreignKeys(subTypeParent.assimilationPath, subTypeParent.primaryKeys) ++
           {
             Column(
               name = config.namingPolicy.toColumnName(subTypeParent, assimilationPath, None, Some(e)),
               description = assimilationPath.tipAssimilation.assimilation.description,
               `type` = ColumnType.VariableCharacter(e.maximumValueSize),
               enumeration = Some(e),
+              isGenerated = false,
+              isNullable = isNullable(assimilationPath.tipAssimilation.assimilation),
               assimilationPath = assimilationPath) +: consumedColumns
           },
         assimilationPath = assimilationPath), mergeJoinableChildTableSets(Some(subTypeParent), childTables))
@@ -370,27 +384,27 @@ object RelationalRenderer {
       }, assimilationPath)
 
   def toTableFromDataTypeOrReference(assimilationPath: JoinedAssimilationPath[DataType], parent: Option[TableInformation] = None, definingRelationship: Boolean = false)(implicit config: Config, model: Model): TableSet = {
-    if (assimilationPath.tipDataType.orientating) {
-      val ti = TableInformation(parent, assimilationPath, parent.get.primaryForeignKeys)
+    if (assimilationPath.tipDataType.isOrientating) {
+      val ti = TableInformation(parent, assimilationPath, parent.get.primaryForeignKeys(assimilationPath))
       val referencedTable = TableInformation(None, JoinedAssimilationPath(assimilationPath.tipDataType))
       TableSet(Table(
         ti.name,
         config.namingPolicy.toTableDescription(assimilationPath),
-        parent.get.primaryForeignKeys ++ referencedTable.primaryForeignKeys,
+        parent.get.primaryForeignKeys(assimilationPath) ++ referencedTable.primaryForeignKeys(assimilationPath),
         assimilationPath), Set.empty[TableSet])
     } else
       toTableFromDataType(assimilationPath, parent, definingRelationship)
   }
 
   def toTableFromDataType(assimilationPath: JoinedAssimilationPath[DataType], parent: Option[TableInformation] = None, definingRelationship: Boolean = false)(implicit config: Config, model: Model): TableSet = {
-    val ti = TableInformation(parent, assimilationPath, if (definingRelationship) parent.get.primaryForeignKeys else Seq())
+    val ti = TableInformation(parent, assimilationPath, if (definingRelationship) parent.get.primaryForeignKeys(assimilationPath) else Seq())
     val (columns, childTables) = config.primaryKeyCreationPolicy.nonPrimaryKeyAssimilations(assimilationPath.tipDataType).map(a => columnsAndChildTables(ti, assimilationPath + a)).foldLeft((Seq.empty[Column], Set.empty[TableSet])) {
       case ((fcs, fts), (cs, ts)) => (fcs ++ cs, fts ++ ts)
     }
     TableSet(Table(
       ti.name,
       config.namingPolicy.toTableDescription(assimilationPath),
-      ti.primaryKeys ++ { if (!parent.isDefined) Seq() else parent.get.foreignKeys(ti.primaryKeys) } ++ columns,
+      ti.primaryKeys ++ { if (!parent.isDefined) Seq() else parent.get.foreignKeys(assimilationPath, ti.primaryKeys) } ++ columns,
       assimilationPath), mergeJoinableChildTableSets(Some(ti), childTables))
   }
 

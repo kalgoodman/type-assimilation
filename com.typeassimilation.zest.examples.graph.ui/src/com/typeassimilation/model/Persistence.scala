@@ -17,7 +17,7 @@ object DataTypePersistence {
     <type>
       <name>{ dataType.name }</name>
       { if (dataType.description.isDefined) <description>{ dataType.description }</description> }
-      { if (dataType.definedOrientating) <orientating>true</orientating> }
+      { if (dataType.definedAsOrientating) <orientating>true</orientating> }
       {
         if (!dataType.assimilations.isEmpty) {
           <assimilations>
@@ -27,7 +27,7 @@ object DataTypePersistence {
                   <assimilation>
                     { if (a.name.isDefined) <name>{ a.name.get }</name> }
                     { if (a.description.isDefined) <description>{ a.description.get }</description> }
-                    { if (a.identifying) <identifying>true</identifying> }
+                    { if (a.isIdentifying) <identifying>true</identifying> }
                     <types>
 											{ a.dataTypeFilePaths.map(dtfp => <file-path>{ dtfp }</file-path>) }
 										</types>
