@@ -23,6 +23,7 @@ case class DataType(val filePath: FilePath.Absolute, name: String, description: 
   def primitive = false
 }
 
+// TODO Introduce weak assimilation?? Or assimilation with path?
 case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
   def absoluteDataTypeFilePaths(dataType: DataType) = dataTypeFilePaths.map(_.toAbsoluteUsingBase(dataType.filePath.parent.get)) 
   override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeFilePaths.mkString(" ,")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
@@ -77,6 +78,7 @@ case class JoinedAssimilationPath[T](assimilationPaths: Set[AssimilationPath[T]]
   private def delegateTipAssimilationPath = assimilationPaths.head
   def tip = delegateTipAssimilationPath.tip
   def tipAssimilation = delegateTipAssimilationPath.tipAssimilation
+  def tipAssimilationOption = delegateTipAssimilationPath.tipAssimilationOption
   def tipDataTypeOption = delegateTipAssimilationPath.tipDataTypeOption
   def tipDataType = delegateTipAssimilationPath.tipDataType
   def tipDataTypes(implicit model: Model) = delegateTipAssimilationPath.tipDataTypes
@@ -107,13 +109,14 @@ case class JoinedAssimilationPath[T](assimilationPaths: Set[AssimilationPath[T]]
         }
       }.map(_.assimilationPath)), parentAssimilationPath.tipDataTypeOption.isDefined)
   }
-  def commonAssimilations = {
+  lazy val commonAssimilations = {
     val (longest, rest) = assimilationPaths.map(_.assimilations).toSeq.sortBy(-_.size).splitAt(1)
     longest.head.flatMap { a =>
       if (rest.foldLeft(true)((present, rar) => present && rar.contains(a))) Some(a)
       else None
     }
   }
+  lazy val commonLength = (commonAssimilations ++ tipDataTypeOption).size
   def isChildOf(parentAssimilationPath: JoinedAssimilationPath[_]) = parentToChildMappings(parentAssimilationPath).foldLeft(0)(_ + _._2.size) == assimilationPaths.size
   override def toString = if (assimilationPaths.size == 1) assimilationPaths.head.toString else s"{\n\t${assimilationPaths.mkString("\n\t")}\n}"
 }
@@ -130,6 +133,10 @@ case class AssimilationPath[T](assimilations: Seq[AbsoluteAssimilation], tipData
   def tip: Either[DataType, AbsoluteAssimilation] = tipDataTypeOption match {
     case None => Right(tipAssimilation)
     case Some(dataType) => Left(dataType)
+  }
+  def tipAssimilationOption = tip match {
+    case Left(dataType) => None
+    case Right(assimilation) => Some(assimilation)
   }
   def +(assimilation: Assimilation): AssimilationPath[Assimilation] = copy(assimilations = assimilations :+ AbsoluteAssimilation(tipDataTypeOption.getOrElse(throw new IllegalStateException(s"The tip is not currently a DataType (it is an assimilation reference - $tipAssimilation)")), assimilation), tipDataTypeOption = None)
   def +(dataType: DataType): AssimilationPath[DataType] = if (tipDataTypeOption.isDefined) throw new IllegalStateException(s"The tip is not currently an Assimilation reference (it is a dataType - ${tipDataType})") else copy(tipDataTypeOption = Some(dataType))
@@ -168,6 +175,7 @@ case class AssimilationPath[T](assimilations: Seq[AbsoluteAssimilation], tipData
       case None => false
       case Some(dataType) => dataType.isOrientating && !assimilations.isEmpty
   }
+  lazy val length = (assimilations ++ tipDataTypeOption).size
   override def toString = {
     def descriptor(dataType: DataType) = s"${dataType.name} (${dataType.filePath})"
     (assimilations.map(a => s"${descriptor(a.dataType)} -> ${a.assimilation.name.getOrElse("<ANONYMOUS>")}") ++ tipDataTypeOption.map(descriptor)).mkString(" => ")
