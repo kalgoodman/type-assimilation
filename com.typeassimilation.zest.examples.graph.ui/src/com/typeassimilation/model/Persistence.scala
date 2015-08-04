@@ -16,8 +16,8 @@ object DataTypePersistence {
   def toXml(dataType: DataType) =
     <type>
       <name>{ dataType.name }</name>
-      { if (dataType.description.isDefined) <description>{ dataType.description }</description> }
-      { if (dataType.definedAsOrientating) <orientating>true</orientating> }
+      { if (dataType.description.isDefined) <description>{ dataType.description.get }</description> }
+      { if (dataType.definedOrientatingStrength.isDefined) <orientating-strength>{ dataType.definedOrientatingStrength.get.representation }</orientating-strength> }
       {
         if (!dataType.assimilations.isEmpty) {
           <assimilations>
@@ -28,6 +28,7 @@ object DataTypePersistence {
                     { if (a.name.isDefined) <name>{ a.name.get }</name> }
                     { if (a.description.isDefined) <description>{ a.description.get }</description> }
                     { if (a.isIdentifying) <identifying>true</identifying> }
+                    { if (a.definedStrength.isDefined) <strength>{ a.definedStrength.get.representation }</strength> }
                     <types>
 											{ a.dataTypeFilePaths.map(dtfp => <file-path>{ dtfp }</file-path>) }
 										</types>
@@ -66,10 +67,11 @@ object DataTypePersistence {
               case None => Some(1)
               case Some(x) => Some(x.toInt)
             },
-            e.childElemTextOption("multiple-occurrence-name")
+            e.childElemTextOption("multiple-occurrence-name"),
+            e.childElemTextOption("strength").map(Strength(_))
        )
       },
-      elem.childElemTextOption("orientating").map(_.toBoolean).getOrElse(false)
+      elem.childElemTextOption("orientating-strength").map(Strength(_))
     )
   }
 }

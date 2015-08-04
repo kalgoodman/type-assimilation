@@ -5,7 +5,7 @@ object AssimilationPathUtils {
     if (a.assimilation.dataTypeFilePaths.size > 1) nextDataTypeOption.map(_.name) orElse Some(a.dataType.name + " Type")
     else None
   }
-  private def dummyAssimilationOption(tipDataTypeOption: Option[DataType]) = tipDataTypeOption.map(dt => AbsoluteAssimilation(dt, Assimilation(None, None, false, Seq(), None, None, None)))
+  private def dummyAssimilationOption(tipDataTypeOption: Option[DataType]) = tipDataTypeOption.map(dt => AbsoluteAssimilation(dt, Assimilation(None, None, false, Seq(), None, None, None, None)))
   private def name(assimilationReferences: Seq[AbsoluteAssimilation], tipDataTypeOption: Option[DataType]) = {
     def tipAssimilationOption = tipDataTypeOption match {
       case None => Some(assimilationReferences.last)

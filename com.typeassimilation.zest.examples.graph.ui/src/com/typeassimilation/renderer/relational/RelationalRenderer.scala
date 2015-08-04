@@ -162,12 +162,12 @@ object RelationalRenderer {
       private def underscoreDelimitedName(s: String) = mutable.LinkedHashSet(s.trim.replaceAll("\\s+", "_").toUpperCase.split('_'): _*).map(shorten).mkString("_")
       def tableName(logicalTable: LogicalTable)(implicit config: Config, model: Model): String = underscoreDelimitedName(AssimilationPathUtils.absoluteName(logicalTable.assimilationPath))
       def tableDescription(logicalTable: LogicalTable)(implicit config: Config, model: Model): Option[String] = logicalTable.assimilationPath.tipDescription
-      def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String = underscoreDelimitedName(AssimilationPathUtils.relativeName(parentLogicalTable.assimilationPath, assimilationPath)) + repeatIndexes.map("_" + _).mkString("_")
+      def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String = underscoreDelimitedName(AssimilationPathUtils.relativeName(parentLogicalTable.assimilationPath, assimilationPath)) + repeatIndexes.map("_" + _).mkString("")
       def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
       def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String = {
         val namesInFirstOccurenceOrder = mutable.LinkedHashSet(columnName(parentLogicalTable, assimilationPath, repeatIndexes).split('_'):_*)
         namesInFirstOccurenceOrder ++= referencePrimaryKeyColumn.name.split('_')
-        namesInFirstOccurenceOrder.mkString("_") + repeatIndexes.map("_" + _).mkString("_")
+        namesInFirstOccurenceOrder.mkString("_") + repeatIndexes.map("_" + _).mkString("")
       }
       def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription 
       def parentForeignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath[_], referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): String = referencePrimaryKeyColumn.name

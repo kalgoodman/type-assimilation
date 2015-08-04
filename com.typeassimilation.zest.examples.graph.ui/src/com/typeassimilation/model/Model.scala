@@ -14,17 +14,29 @@ import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
 
-case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedAsOrientating: Boolean) {
+case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedOrientatingStrength: Option[Strength]) {
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
   def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeFilePaths.contains(filePath))
-  def isOrientating(implicit model: Model) = definedAsOrientating || model.orientatingDataTypes.contains(this)
+  def isOrientating(implicit model: Model) = definedOrientatingStrength == Some(Strength.Strong) || model.orientatingDataTypes.contains(this)
   def identifyingAssimilations = assimilations.filter(_.isIdentifying)
   def preset = false
   def primitive = false
 }
 
+sealed trait Strength {
+  def representation: String
+}
+object Strength {
+  case object Weak extends Strength { val representation = "WEAK" }
+  case object Strong extends Strength { val representation = "STRONG" }
+  def apply(s: String): Strength = s match {
+    case Weak.representation => Weak
+    case Strong.representation => Strong
+    case _ => throw new IllegalArgumentException(s"There is no such strength as '$s'.")
+  }
+}
 // TODO Introduce weak assimilation?? Or assimilation with path?
-case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
+case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String], definedStrength: Option[Strength]) {
   def absoluteDataTypeFilePaths(dataType: DataType) = dataTypeFilePaths.map(_.toAbsoluteUsingBase(dataType.filePath.parent.get)) 
   override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeFilePaths.mkString(" ,")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
 }
@@ -40,7 +52,7 @@ object Preset {
     private val presetDataTypes = mutable.Set.empty[DataType]
     private def presetPath(name: String) = RootFilePath + name.asRelative
     private def presetDataType(name: String, description: String) = {
-      val dt = new DataType(presetPath(name), name, Some(description), Seq(), false) {
+      val dt = new DataType(presetPath(name), name, Some(description), Seq(), None) {
         override val preset = true
         override val primitive = true
       }
@@ -59,12 +71,12 @@ object Preset {
     val TextBlock = presetDataType("TEXTBLOCK", "The preset block of text type.")
     val ShortName = presetDataType("SHORTNAME", "The preset short name type.")
     val LongName = presetDataType("LONGNAME", "The preset long name type.")
-    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(filePath), Some(1), Some(1), None)
+    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(filePath), Some(1), Some(1), None, None)
     val Money = {
       val name = "MONEY"
       val dt = new DataType(presetPath(name), name, Some("The preset monetary amount type."), Seq(
         assimilation("Amount", "The value of the monetary amount - i.e. The number without the currency.", DecimalNumber.filePath),
-        assimilation("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)), false) {
+        assimilation("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)), None) {
         override val preset = true
       }
       presetDataTypes += dt
@@ -193,7 +205,7 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   lazy val orientatingDataTypes = {
     val initialOrientatingDataTypes = {
-      val defined = dataTypes.filter(_.definedAsOrientating)
+      val defined = dataTypes.filter(_.definedOrientatingStrength == Some(Strength.Strong))
       val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeFilePaths(dt)).find(_ == dt.filePath).isDefined)
       rootDataTypes ++ defined ++ selfLooping
     }
