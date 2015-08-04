@@ -2,13 +2,13 @@ package com.typeassimilation
 
 import java.io.File
 import com.typeassimilation.model.ModelPesistence
-import com.typeassimilation.model.RelationalRenderer
-import com.typeassimilation.model.RelationalRenderer.PrimaryKeyCreationPolicy
+import com.typeassimilation.renderer.relational.RelationalRenderer
+import com.typeassimilation.renderer.relational.RelationalModel
 
 object App {
     def main(args: Array[String]): Unit = {
       val model = ModelPesistence.readDirectory(new File(args(0)))
-      println(RelationalRenderer.render(model, RelationalRenderer.Config(primaryKeyCreationPolicy = RelationalRenderer.PrimaryKeyCreationPolicy.SurrogateKeyGeneration)))
+      println(RelationalModel(RelationalRenderer.render(model)))
       ModelPesistence.writeDirectory(model, new File(args(1)))
     }
 }

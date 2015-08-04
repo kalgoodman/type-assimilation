@@ -170,7 +170,7 @@ case class AssimilationPath[T](assimilations: Seq[AbsoluteAssimilation], tipData
   def relativeTo(parentAssimilationPath: AssimilationPath[_]): RelativeAssimilationPath[T] =
     if (!isChildOf(parentAssimilationPath)) throw new IllegalStateException(s"The path $parentAssimilationPath is not a root path of $this.")
     else RelativeAssimilationPath(AssimilationPath(assimilations.drop(parentAssimilationPath.assimilations.size), tipDataTypeOption), parentAssimilationPath.tipDataTypeOption.isDefined)
-  def isChildOf(assimilationPath: AssimilationPath[_]) = assimilations.startsWith(assimilationPath.assimilations) && (!assimilationPath.tipDataTypeOption.isDefined || assimilations(assimilationPath.assimilations.size).dataType == assimilationPath.tipDataTypeOption.get)
+  def isChildOf(assimilationPath: AssimilationPath[_]) = assimilations.startsWith(assimilationPath.assimilations) && (!assimilationPath.tipDataTypeOption.isDefined || (assimilations.size == assimilationPath.assimilations.size && tipDataTypeOption == assimilationPath.tipDataTypeOption) || assimilations(assimilationPath.assimilations.size).dataType == assimilationPath.tipDataTypeOption.get)
   def isReferenceToOrientatingDataType(implicit model: Model) = tipDataTypeOption match {
       case None => false
       case Some(dataType) => dataType.isOrientating && !assimilations.isEmpty
