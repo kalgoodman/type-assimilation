@@ -14,35 +14,57 @@ import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
 
-case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], definedOrientatingStrength: Option[Strength]) {
+case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], isOrientating: Boolean) {
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
-  def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeFilePaths.contains(filePath))
-  def isOrientating(implicit model: Model) = definedOrientatingStrength == Some(Strength.Strong) || model.orientatingDataTypes.contains(this)
+  def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeReferences.map(_.filePath).contains(filePath))
+  def isEffectivelyOrientating(implicit model: Model) = isOrientating || model.orientatingDataTypes.contains(this)
   def identifyingAssimilations = assimilations.filter(_.isIdentifying)
   def preset = false
   def primitive = false
 }
 
-sealed trait Strength {
+sealed trait AssimilationStrength {
   def representation: String
 }
-object Strength {
-  case object Weak extends Strength { val representation = "WEAK" }
-  case object Strong extends Strength { val representation = "STRONG" }
-  def apply(s: String): Strength = s match {
+object AssimilationStrength {
+  case object Reference extends AssimilationStrength { val representation = "REFERENCE" }
+  case object Weak extends AssimilationStrength { val representation = "WEAK" }
+  case object Strong extends AssimilationStrength { val representation = "STRONG" }
+  def apply(s: String): AssimilationStrength = s match {
+    case Reference.representation => Reference
     case Weak.representation => Weak
     case Strong.representation => Strong
     case _ => throw new IllegalArgumentException(s"There is no such strength as '$s'.")
   }
+  implicit object Ordering extends Ordering[AssimilationStrength] {
+    private val strengthRank = Map[AssimilationStrength, Int](
+        Reference -> 0,
+        Weak -> 1,
+        Strong -> 2
+      )
+    def compare(x: AssimilationStrength, y: AssimilationStrength): Int = strengthRank(x).compareTo(strengthRank(y))
+  }
 }
-// TODO Introduce weak assimilation?? Or assimilation with path?
-case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeFilePaths: Seq[FilePath], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String], definedStrength: Option[Strength]) {
-  def absoluteDataTypeFilePaths(dataType: DataType) = dataTypeFilePaths.map(_.toAbsoluteUsingBase(dataType.filePath.parent.get)) 
-  override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeFilePaths.mkString(" ,")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
+sealed trait DataTypeReferenceLike {
+  def filePath: FilePath
+  def strength: Option[AssimilationStrength]
+  def effectiveStrength(absoluteAssimilation: AbsoluteAssimilation)(implicit model: Model) = model.effectiveStrength(absoluteAssimilation, this)
+  def toAbsolute(dataType: DataType): AbsoluteDataTypeReference
+  def toAbsolute(absoluteAssimilation: AbsoluteAssimilation): AbsoluteDataTypeReference = toAbsolute(absoluteAssimilation.dataType)
+}
+case class DataTypeReference(filePath: FilePath, strength: Option[AssimilationStrength] = None) extends DataTypeReferenceLike {
+  def toAbsolute(dataType: DataType) = AbsoluteDataTypeReference(filePath.toAbsoluteUsingBase(dataType.filePath.parent.get), strength)
+}
+case class AbsoluteDataTypeReference(filePath: FilePath.Absolute, strength: Option[AssimilationStrength] = None) extends DataTypeReferenceLike {
+  def toAbsolute(dataType: DataType) = this
+}
+case class Assimilation(name: Option[String], description: Option[String], isIdentifying: Boolean, dataTypeReferences: Seq[DataTypeReference], minimumOccurences: Option[Int], maximumOccurences: Option[Int], multipleOccurenceName: Option[String]) {
+  def absoluteDataTypeReferences(dataType: DataType) = dataTypeReferences.map(dtr => AbsoluteDataTypeReference(dtr.filePath.toAbsoluteUsingBase(dataType.filePath.parent.get), dtr.strength))
+  override def toString = name.getOrElse("<ANONYMOUS>") + multipleOccurenceName.map(mon => s"($mon)").getOrElse("") + description.map(d => s" '$d'").getOrElse("") + s" -> [${dataTypeReferences.map(dtr => dtr.filePath).mkString(", ")}] {${minimumOccurences.getOrElse("*")},${maximumOccurences.getOrElse("*")}}"
 }
 case class AbsoluteAssimilation(dataType: DataType, assimilation: Assimilation) {
-  def dataTypeFilePaths = assimilation.absoluteDataTypeFilePaths(dataType)
-  def dataTypes(implicit model: Model) = dataTypeFilePaths.flatMap(dtfp => model.dataTypeOption(dtfp))
+  def dataTypeReferences = assimilation.absoluteDataTypeReferences(dataType)
+  def dataTypes(implicit model: Model) = dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath))
   override def toString = s"${dataType.name} (${dataType.filePath}) -> ${assimilation}"
 }
 
@@ -52,7 +74,7 @@ object Preset {
     private val presetDataTypes = mutable.Set.empty[DataType]
     private def presetPath(name: String) = RootFilePath + name.asRelative
     private def presetDataType(name: String, description: String) = {
-      val dt = new DataType(presetPath(name), name, Some(description), Seq(), None) {
+      val dt = new DataType(presetPath(name), name, Some(description), Seq(), false) {
         override val preset = true
         override val primitive = true
       }
@@ -71,12 +93,12 @@ object Preset {
     val TextBlock = presetDataType("TEXTBLOCK", "The preset block of text type.")
     val ShortName = presetDataType("SHORTNAME", "The preset short name type.")
     val LongName = presetDataType("LONGNAME", "The preset long name type.")
-    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(filePath), Some(1), Some(1), None, None)
+    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(DataTypeReference(filePath)), Some(1), Some(1), None)
     val Money = {
       val name = "MONEY"
       val dt = new DataType(presetPath(name), name, Some("The preset monetary amount type."), Seq(
         assimilation("Amount", "The value of the monetary amount - i.e. The number without the currency.", DecimalNumber.filePath),
-        assimilation("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)), None) {
+        assimilation("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)), false) {
         override val preset = true
       }
       presetDataTypes += dt
@@ -185,7 +207,7 @@ case class AssimilationPath[T](assimilations: Seq[AbsoluteAssimilation], tipData
   def isChildOf(assimilationPath: AssimilationPath[_]) = assimilations.startsWith(assimilationPath.assimilations) && (!assimilationPath.tipDataTypeOption.isDefined || (assimilations.size == assimilationPath.assimilations.size && tipDataTypeOption == assimilationPath.tipDataTypeOption) || assimilations(assimilationPath.assimilations.size).dataType == assimilationPath.tipDataTypeOption.get)
   def isReferenceToOrientatingDataType(implicit model: Model) = tipDataTypeOption match {
       case None => false
-      case Some(dataType) => dataType.isOrientating && !assimilations.isEmpty
+      case Some(dataType) => dataType.isEffectivelyOrientating && !assimilations.isEmpty
   }
   lazy val length = (assimilations ++ tipDataTypeOption).size
   override def toString = {
@@ -205,8 +227,8 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   lazy val orientatingDataTypes = {
     val initialOrientatingDataTypes = {
-      val defined = dataTypes.filter(_.definedOrientatingStrength == Some(Strength.Strong))
-      val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeFilePaths(dt)).find(_ == dt.filePath).isDefined)
+      val defined = dataTypes.filter(_.isOrientating)
+      val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeReferences(dt)).find(_.filePath == dt.filePath).isDefined)
       rootDataTypes ++ defined ++ selfLooping
     }
     def findLoops(alreadyCrossedDataTypes: Set[DataType], dataType: DataType): Set[Set[DataType]] = {
@@ -231,4 +253,20 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
     initialOrientatingDataTypes ++ selectedLoopBreakingDataTypes
   }
   def rootDataTypes = dataTypes.filter(dt => dt.selfAssimilations.isEmpty && !dt.preset)
+  def effectiveStrength(absoluteAssimilation: AbsoluteAssimilation, dataTypeReference: DataTypeReferenceLike)(implicit model: Model): AssimilationStrength = {
+    val absoluteDtr = dataTypeReference.toAbsolute(absoluteAssimilation)
+    val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeReferences(dt)).find(_.filePath == dt.filePath).isDefined)
+    
+    def assimilationStrength(dataType: DataType): AssimilationStrength = ???
+      
+  // Assimilations of Self-Referencing DataTypes are either weak or reference (Depending on what self-reference is and if orientating data type)
+  // Unresolved assimilation loops containing no bounds should simply be registered: Any assimilation of a data type in the loop should be:
+  // - Weak if not specified
+  // - Never Strong
+  // - Can be set to reference
+  // Everything else is effectively defined
+    
+    
+    ???
+  }
 }

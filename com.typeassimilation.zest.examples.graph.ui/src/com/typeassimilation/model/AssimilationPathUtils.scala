@@ -2,10 +2,10 @@ package com.typeassimilation.model
 
 object AssimilationPathUtils {
   private def nameElement(a: AbsoluteAssimilation, nextDataTypeOption: Option[DataType]) = a.assimilation.name orElse {
-    if (a.assimilation.dataTypeFilePaths.size > 1) nextDataTypeOption.map(_.name) orElse Some(a.dataType.name + " Type")
+    if (a.assimilation.dataTypeReferences.size > 1) nextDataTypeOption.map(_.name) orElse Some(a.dataType.name + " Type")
     else None
   }
-  private def dummyAssimilationOption(tipDataTypeOption: Option[DataType]) = tipDataTypeOption.map(dt => AbsoluteAssimilation(dt, Assimilation(None, None, false, Seq(), None, None, None, None)))
+  private def dummyAssimilationOption(tipDataTypeOption: Option[DataType]) = tipDataTypeOption.map(dt => AbsoluteAssimilation(dt, Assimilation(None, None, false, Seq(), None, None, None)))
   private def name(assimilationReferences: Seq[AbsoluteAssimilation], tipDataTypeOption: Option[DataType]) = {
     def tipAssimilationOption = tipDataTypeOption match {
       case None => Some(assimilationReferences.last)
@@ -31,7 +31,7 @@ object AssimilationPathUtils {
       }._2 ++ assimilationPath.tipAssimilationOption.flatMap(_.assimilation.name)).mkString(" ")
     }
     ((
-      if (assimilationPath.tipDataTypeOption.isDefined && !assimilationPath.commonAssimilations.isEmpty && assimilationPath.tipDataType.isOrientating) absoluteName(assimilationPath.assimilationParents.head.dataTypeParents.head) + " "
+      if (assimilationPath.tipDataTypeOption.isDefined && !assimilationPath.commonAssimilations.isEmpty && assimilationPath.tipDataType.isEffectivelyOrientating) absoluteName(assimilationPath.assimilationParents.head.dataTypeParents.head) + " "
       else ""
     ) + actualAbsoluteName).trim
   }

@@ -17,7 +17,7 @@ object DataTypePersistence {
     <type>
       <name>{ dataType.name }</name>
       { if (dataType.description.isDefined) <description>{ dataType.description.get }</description> }
-      { if (dataType.definedOrientatingStrength.isDefined) <orientating-strength>{ dataType.definedOrientatingStrength.get.representation }</orientating-strength> }
+      { if (dataType.isOrientating) <orientating-strength>true</orientating-strength> }
       {
         if (!dataType.assimilations.isEmpty) {
           <assimilations>
@@ -28,13 +28,19 @@ object DataTypePersistence {
                     { if (a.name.isDefined) <name>{ a.name.get }</name> }
                     { if (a.description.isDefined) <description>{ a.description.get }</description> }
                     { if (a.isIdentifying) <identifying>true</identifying> }
-                    { if (a.definedStrength.isDefined) <strength>{ a.definedStrength.get.representation }</strength> }
                     <types>
-											{ a.dataTypeFilePaths.map(dtfp => <file-path>{ dtfp }</file-path>) }
-										</types>
-										{ if (a.minimumOccurences.isDefined && a.minimumOccurences != Some(0)) <minimum-occurrence>{a.minimumOccurences.get}</minimum-occurrence> }
-                    { if (a.maximumOccurences != Some(1)) <maximum-occurrence>{a.maximumOccurences.getOrElse(UnboundedLimitName)}</maximum-occurrence> }
-                    { if (a.multipleOccurenceName.isDefined) <multiple-occurrence-name>{a.multipleOccurenceName.get}</multiple-occurrence-name> }
+                      {
+                        a.dataTypeReferences.map { dtr =>
+                          <type>
+                            <file-path>{ dtr.filePath }</file-path>
+														{ if (dtr.strength.isDefined) <strength>{dtr.strength.get.representation}</strength> }
+                          </type>
+                        }
+                      }
+                    </types>
+                    { if (a.minimumOccurences.isDefined && a.minimumOccurences != Some(0)) <minimum-occurrence>{ a.minimumOccurences.get }</minimum-occurrence> }
+                    { if (a.maximumOccurences != Some(1)) <maximum-occurrence>{ a.maximumOccurences.getOrElse(UnboundedLimitName) }</maximum-occurrence> }
+                    { if (a.multipleOccurenceName.isDefined) <multiple-occurrence-name>{ a.multipleOccurenceName.get }</multiple-occurrence-name> }
                   </assimilation>
               }
             }
@@ -47,17 +53,23 @@ object DataTypePersistence {
     val elem = try {
       XML.loadFile(absoluteFilePath)
     } catch {
-      case t: Throwable => throw new IllegalStateException(s"Could not load '$absoluteFilePath'.", t) 
+      case t: Throwable => throw new IllegalStateException(s"Could not load '$absoluteFilePath'.", t)
     }
     new DataType(filePath,
       elem.childElemTextOption("name").get,
       elem.childElemTextOption("description"),
       (elem \ "assimilations" \ "assimilation").toElemSeq.map {
-        e => Assimilation(
+        e =>
+          Assimilation(
             e.childElemTextOption("name"),
             e.childElemTextOption("description"),
             e.childElemTextOption("identifying").map(_.toBoolean).getOrElse(false),
-            (e \ "types" \ "file-path").toElemSeq.map(fpe => FilePath(fpe.text)),
+            (e \ "types" \ "type").toElemSeq.map {
+              te => DataTypeReference(
+                    te.childElemTextOption("file-path").map(FilePath(_)).get,
+                    te.childElemTextOption("strength").map(AssimilationStrength(_))
+                  )
+            },
             e.childElemTextOption("minimum-occurrence") match {
               case None => Some(0)
               case Some(x) => Some(x.toInt)
@@ -67,12 +79,9 @@ object DataTypePersistence {
               case None => Some(1)
               case Some(x) => Some(x.toInt)
             },
-            e.childElemTextOption("multiple-occurrence-name"),
-            e.childElemTextOption("strength").map(Strength(_))
-       )
+            e.childElemTextOption("multiple-occurrence-name"))
       },
-      elem.childElemTextOption("orientating-strength").map(Strength(_))
-    )
+      elem.childElemTextOption("orientating").map(_.toBoolean).getOrElse(false))
   }
 }
 
@@ -85,6 +94,5 @@ object ModelPesistence {
     model.dataTypes.filter(!Preset.DataType.All.contains(_)).foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
   }
   def readDirectory(directory: File): Model = new Model(
-    DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)).toSet
-  )
+    DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)).toSet)
 }

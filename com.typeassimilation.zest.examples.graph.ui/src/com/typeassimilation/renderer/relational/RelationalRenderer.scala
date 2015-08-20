@@ -60,7 +60,7 @@ object RelationalRenderer {
       def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
       def size = 1
       def childAssimilationPath(implicit model: Model) = assimilationPath.tipDataTypeOption match {
-        case Some(dataType) if dataType.isOrientating => JoinedAssimilationPath(dataType)
+        case Some(dataType) if dataType.isEffectivelyOrientating => JoinedAssimilationPath(dataType)
         case None => throw new IllegalStateException(s"Currently can only deal with child references to orientating data types - not [$assimilationPath]")
       }
     }
@@ -256,7 +256,7 @@ object RelationalRenderer {
   }
 
   def toTableFromAssimilation(assimilationPath: JoinedAssimilationPath[Assimilation])(implicit config: Config, model: Model): LogicalTableSet = {
-    if (assimilationPath.tipAssimilation.dataTypeFilePaths.size == 1 && assimilationPath.singleTipDataType.primitive) {
+    if (assimilationPath.tipAssimilation.dataTypeReferences.size == 1 && assimilationPath.singleTipDataType.primitive) {
       LogicalTableSet(LogicalTable(
           assimilationPath = assimilationPath,
           columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toPrimitiveColumnGroup(assimilationPath)))
@@ -279,7 +279,7 @@ object RelationalRenderer {
   }
 
   def toTableFromDataTypeOrReference(assimilationPath: JoinedAssimilationPath[DataType])(implicit config: Config, model: Model): LogicalTableSet = {
-    if (assimilationPath.tipDataType.isOrientating) {
+    if (assimilationPath.tipDataType.isEffectivelyOrientating) {
       LogicalTableSet(
           LogicalTable(
             assimilationPath = assimilationPath,
