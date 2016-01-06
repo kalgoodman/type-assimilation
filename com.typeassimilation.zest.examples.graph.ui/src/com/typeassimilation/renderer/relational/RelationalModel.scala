@@ -52,7 +52,12 @@ object RelationalModel {
   def columns(columnGroup: ColumnGroup, repeatIndexes: Seq[Int], parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
     implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
-    def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath).assimilationPath.commonAssimilations.head.assimilation.minimumOccurences.getOrElse(0) < 1
+    def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && (columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath).japOption match {
+      case None => true
+      case Some(jap) => jap.commonAssimilationPath.tipEither match {
+        case Right(aa) => aa.assimilation.minimumOccurences.getOrElse(0) < 1
+      }
+    })
     import ColumnGroup._
     columnGroup match {
       case Repeated(columnGroup, repeats) => (1 to repeats).flatMap(index => columns(columnGroup, repeatIndexes :+ index, parentLogicalTable, logicalRelationalModel))
@@ -68,12 +73,12 @@ object RelationalModel {
         val enumeration = {
           Enumeration(
               name = config.namingPolicy.enumerationName(e.assimilationPath),
-              values = e.assimilationPath.tipDataTypes.map {
+              values = e.assimilationPath.tip.dataTypes.map {
                 dt =>
                   val valueAssimilationPath = e.assimilationPath + dt
                   EnumerationValue(config.namingPolicy.enumerationValueName(valueAssimilationPath), config.namingPolicy.enumerationValueDescription(valueAssimilationPath), valueAssimilationPath)
               },
-              assimilationPath = e.assimilationPath.asAssimilation)
+              assimilationPath = e.assimilationPath)
         }
         columns(SimpleColumn(e.assimilationPath, ColumnType.VariableCharacter(enumeration.maximumValueSize)), repeatIndexes, parentLogicalTable, logicalRelationalModel).map(_.copy(
           enumeration = Some(enumeration)
@@ -118,7 +123,7 @@ object ColumnType {
   case object Integer extends ColumnType
 }
 
-case class Table(name: String, description: Option[String], columns: Seq[Column], assimilationPath: JoinedAssimilationPath[_]) {
+case class Table(name: String, description: Option[String], columns: Seq[Column], assimilationPath: JoinedAssimilationPath) {
   private val nameToColumnMap = columns.map(c => c.name -> c).toMap
   def column(name: String) = nameToColumnMap.get(name)
   def primaryKeys = columns.filter(_.isPrimaryKey)
@@ -133,7 +138,7 @@ case class Table(name: String, description: Option[String], columns: Seq[Column]
   }
   override def toString = name + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath] {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
 }
-case class Column(name: String, description: Option[String], `type`: ColumnType, isGenerated: Boolean, isNullable: Boolean, assimilationPath: JoinedAssimilationPath[_], isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
+case class Column(name: String, description: Option[String], `type`: ColumnType, isGenerated: Boolean, isNullable: Boolean, assimilationPath: JoinedAssimilationPath, isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
   override def toString = s"$name " + `type`.toString + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
     if (isPrimaryKey && foreignKeyReference.isEmpty) "(PK)"
     else if (!isPrimaryKey && foreignKeyReference.isDefined) "(FK -> " + foreignKeyReference.get + ")"
@@ -145,10 +150,10 @@ case class Column(name: String, description: Option[String], `type`: ColumnType,
 case class ColumnReference(tableName: String, columnName: String) {
   override def toString = s"$tableName.$columnName"
 }
-case class Enumeration(name: String, values: Seq[EnumerationValue], assimilationPath: JoinedAssimilationPath[Assimilation]) {
+case class Enumeration(name: String, values: Seq[EnumerationValue], assimilationPath: JoinedAssimilationPath.AssimilationTip) {
   def maximumValueSize = values.map(_.name.length).foldLeft(0)((size, v) => if (v > size) v else size)
   override def toString = s"$name [$assimilationPath] {\n" + values.map(v => s"\t${v.toString}").mkString("\n") + "\n}\n"
 }
-case class EnumerationValue(name: String, description: Option[String], assimilationPath: JoinedAssimilationPath[DataType]) {
+case class EnumerationValue(name: String, description: Option[String], assimilationPath: JoinedAssimilationPath.DataTypeTip) {
   override def toString = name + (if (description.isDefined) s" - ${description.get}" else "") + s"  [$assimilationPath]"
 }
