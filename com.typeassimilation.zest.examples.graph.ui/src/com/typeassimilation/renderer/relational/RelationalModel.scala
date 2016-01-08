@@ -80,7 +80,7 @@ object RelationalModel {
               },
               assimilationPath = e.assimilationPath)
         }
-        columns(SimpleColumn(e.assimilationPath, ColumnType.VariableCharacter(enumeration.maximumValueSize)), repeatIndexes, parentLogicalTable, logicalRelationalModel).map(_.copy(
+        columns(SimpleColumn(e.assimilationPath, ColumnType(config.enumerationColumnType.replaceAllLiterally("[SIZE]", enumeration.maximumValueSize.toString))), repeatIndexes, parentLogicalTable, logicalRelationalModel).map(_.copy(
           enumeration = Some(enumeration)
         ))
       case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, repeatIndexes, parentLogicalTable, logicalRelationalModel)) 
@@ -111,18 +111,7 @@ object RelationalModel {
     
 }
 
-sealed trait ColumnType
-object ColumnType {
-  case object Date extends ColumnType
-  case object Time extends ColumnType
-  case object DateTime extends ColumnType
-  case class VariableCharacter(size: Int) extends ColumnType
-  case class FixedCharacter(size: Int) extends ColumnType
-  case object CharacterLob extends ColumnType
-  case class Number(depth: Int, precision: Int) extends ColumnType
-  case object Integer extends ColumnType
-}
-
+case class ColumnType(typeDefinition: String)
 case class Table(name: String, description: Option[String], columns: Seq[Column], assimilationPath: JoinedAssimilationPath) {
   private val nameToColumnMap = columns.map(c => c.name -> c).toMap
   def column(name: String) = nameToColumnMap.get(name)
@@ -139,10 +128,10 @@ case class Table(name: String, description: Option[String], columns: Seq[Column]
   override def toString = name + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath] {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
 }
 case class Column(name: String, description: Option[String], `type`: ColumnType, isGenerated: Boolean, isNullable: Boolean, assimilationPath: JoinedAssimilationPath, isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
-  override def toString = s"$name " + `type`.toString + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
-    if (isPrimaryKey && foreignKeyReference.isEmpty) "(PK)"
-    else if (!isPrimaryKey && foreignKeyReference.isDefined) "(FK -> " + foreignKeyReference.get + ")"
-    else if (isPrimaryKey && foreignKeyReference.isDefined) "(PFK -> " + foreignKeyReference.get + ")"
+  override def toString = s"$name " + `type`.typeDefinition + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
+    if (isPrimaryKey && foreignKeyReference.isEmpty) " (PK)"
+    else if (!isPrimaryKey && foreignKeyReference.isDefined) " (FK -> " + foreignKeyReference.get + ")"
+    else if (isPrimaryKey && foreignKeyReference.isDefined) " (PFK -> " + foreignKeyReference.get + ")"
     else ""
   } + (if (isNullable) " NULL" else " NOT NULL") + (if (isGenerated) " <GENERATED>" else "") + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath]"
   def toForeignKeyReference(tableName: String) = ColumnReference(tableName, name)

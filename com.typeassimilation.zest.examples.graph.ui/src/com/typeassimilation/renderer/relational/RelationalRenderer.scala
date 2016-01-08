@@ -129,10 +129,26 @@ object RelationalRenderer {
 
   case class Config(
     maximumOccurencesTableLimit: Int = 4,
-    identifierLength: Int = 30,
     maximumSubTypeColumnsBeforeSplittingOut: Option[Int] = Some(10),
     namingPolicy: NamingPolicy = NamingPolicy.Default,
-    primaryKeyPolicy: PrimaryKeyPolicy = PrimaryKeyPolicy.SurrogateKeyGeneration)
+    primaryKeyPolicy: PrimaryKeyPolicy = PrimaryKeyPolicy.SurrogateKeyGeneration,
+    surrogateKeyColumnType: ColumnType = ColumnType("NUMBER(15)"),
+    enumerationColumnType: String = "VARCHAR([SIZE])",
+    columnTypeMap: Map[FilePath.Absolute, ColumnType] = Map(
+      FilePath("/common/identifier.type.xml").asAbsolute -> ColumnType("VARCHAR(30)"),
+      FilePath("/common/datetime.type.xml").asAbsolute -> ColumnType("DATETIME"),
+      FilePath("/common/date.type.xml").asAbsolute -> ColumnType("DATE"),
+      FilePath("/common/integer.type.xml").asAbsolute -> ColumnType("INTEGER"),
+      FilePath("/common/decimal.type.xml").asAbsolute -> ColumnType("NUMBER(10, 5)"),
+      FilePath("/common/boolean.type.xml").asAbsolute -> ColumnType("CHAR(1)"),
+      FilePath("/common/code2.type.xml").asAbsolute -> ColumnType("CHAR(2)"),
+      FilePath("/common/code3.type.xml").asAbsolute -> ColumnType("CHAR(3)"),
+      FilePath("/common/textblock.type.xml").asAbsolute -> ColumnType("VARCHAR(500)"),
+      FilePath("/common/shortname.type.xml").asAbsolute -> ColumnType("VARCHAR(50)"),
+      FilePath("/common/longname.type.xml").asAbsolute -> ColumnType("VARCHAR(100)")
+    )) {
+    def mappedColumnType(dt: DataType) = columnTypeMap.get(dt.filePath)
+  }
     
   trait NamingPolicy {
     def tableName(logicalTable: LogicalTable)(implicit config: Config, model: Model): String
@@ -197,7 +213,7 @@ object RelationalRenderer {
         case cr: ChildReference => cr.assimilationPath == logicalTable.parentReferenceOption.get.assimilationPath 
         case _ => false
       })
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = if (currentPrimaryKeys.isEmpty) Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), ColumnType.Number(15, 0), true, false, logicalTable.assimilationPath, true)) else currentPrimaryKeys
+      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = if (currentPrimaryKeys.isEmpty) Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)) else currentPrimaryKeys
     }
     case class NaturalKey(suffix: String = "_ID") extends PrimaryKeyPolicy {
       private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.find(_.assimilationPath.tipEither match {
@@ -210,32 +226,13 @@ object RelationalRenderer {
       })
       def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = currentPrimaryKeys ++ (
           if (hasIdentifyingColumnGroup(logicalTable)) Seq()
-          else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)(logicalRelationalModel.model)}."), ColumnType.Number(15, 0), true, false, logicalTable.assimilationPath, true))
+          else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)(logicalRelationalModel.model)}."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true))
       )
     }
   }
   
   def render(implicit model: Model, config: Config = Config()) = 
       LogicalRelationalModel(model.orientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), model, config)
-
-  def toPrimitiveColumnGroup(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): ColumnGroup = {
-    def columnGroup(columnType: ColumnType) = ColumnGroup.SimpleColumn(assimilationPath, columnType)
-    import Preset.DataType._
-    assimilationPath.tip.dataTypes.head match {
-      case Identifier => columnGroup(ColumnType.VariableCharacter(config.identifierLength))
-      case DateTime => columnGroup(ColumnType.DateTime)
-      case Date => columnGroup(ColumnType.Date)
-      case IntegralNumber => columnGroup(ColumnType.Integer)
-      case DecimalNumber => columnGroup(ColumnType.Number(10, 5))
-      case Boolean => columnGroup(ColumnType.FixedCharacter(1))
-      case Code2 => columnGroup(ColumnType.FixedCharacter(2))
-      case Code3 => columnGroup(ColumnType.FixedCharacter(3))
-      case TextBlock => columnGroup(ColumnType.VariableCharacter(500))
-      case ShortName => columnGroup(ColumnType.VariableCharacter(50))
-      case LongName => columnGroup(ColumnType.VariableCharacter(100))
-      case x => throw new IllegalArgumentException(s"${x.filePath} is not accounted for...")
-    }
-  }
 
   def columnGroupsAndChildTables(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): (Seq[ColumnGroup], Set[LogicalTableSet]) = {
     val tableSet = toTableFromAssimilation(assimilationPath)
@@ -262,12 +259,15 @@ object RelationalRenderer {
     }
     recurse(Set(), childLogicalTableSets)
   }
+  
+  def toSimpleColumnGroup(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): ColumnGroup.SimpleColumn =
+    ColumnGroup.SimpleColumn(assimilationPath, config.mappedColumnType(assimilationPath.tip.dataTypes.head).get)
 
   def toTableFromAssimilation(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): LogicalTableSet = {
-    if (assimilationPath.tip.dataTypeReferences.size == 1 && assimilationPath.tip.dataTypes.head.primitive) {
+    if (assimilationPath.tip.dataTypeReferences.size == 1 && config.mappedColumnType(assimilationPath.tip.dataTypes.head).isDefined) {
       LogicalTableSet(LogicalTable(
           assimilationPath = assimilationPath,
-          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toPrimitiveColumnGroup(assimilationPath)))
+          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toSimpleColumnGroup(assimilationPath)))
         , Set())
     }
     else if (assimilationPath.tip.dataTypeReferences.size == 1) toTableFromDataTypeOrReference(assimilationPath + assimilationPath.tip.dataTypes.head)

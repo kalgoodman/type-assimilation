@@ -19,8 +19,6 @@ case class DataType(val filePath: FilePath.Absolute, name: String, description: 
   def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeReferences.map(_.filePath).contains(filePath))
   def isEffectivelyOrientating(implicit model: Model) = isOrientating || model.orientatingDataTypes.contains(this)
   def identifyingAssimilations = assimilations.filter(_.isIdentifying)
-  def preset = false
-  def primitive = false
 }
 
 sealed trait AssimilationStrength {
@@ -67,46 +65,6 @@ case class AbsoluteAssimilation(dataType: DataType, assimilation: Assimilation) 
   def dataTypeReferences = assimilation.absoluteDataTypeReferences(dataType)
   def dataTypes(implicit model: Model) = dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath))
   override def toString = s"${dataType.name} (${dataType.filePath}) -> ${assimilation}"
-}
-
-object Preset {
-  val RootFilePath = "/$".asAbsolute
-  object DataType {
-    private val presetDataTypes = mutable.Set.empty[DataType]
-    private def presetPath(name: String) = RootFilePath + name.asRelative
-    private def presetDataType(name: String, description: String) = {
-      val dt = new DataType(presetPath(name), name, Some(description), Seq(), false) {
-        override val preset = true
-        override val primitive = true
-      }
-      presetDataTypes += dt
-      dt
-    }
-    val Identifier = presetDataType("IDENTIFIER", "The preset identifier type.")
-    val DateTime = presetDataType("DATETIME", "The preset date/time type.")
-    val Date = presetDataType("DATE", "The preset date type.")
-    val Time = presetDataType("TIME", "The preset time type.")
-    val IntegralNumber = presetDataType("INTEGER", "The preset integral number type (any whole number).")
-    val DecimalNumber = presetDataType("DECIMAL", "The preset decimal number type (any number that isn't integral).")
-    val Boolean = presetDataType("BOOLEAN", "The preset boolean type.")
-    val Code2 = presetDataType("CODE2", "The preset coded value of character length 2 type.")
-    val Code3 = presetDataType("CODE3", "The preset coded value of character length 3 type.")
-    val TextBlock = presetDataType("TEXTBLOCK", "The preset block of text type.")
-    val ShortName = presetDataType("SHORTNAME", "The preset short name type.")
-    val LongName = presetDataType("LONGNAME", "The preset long name type.")
-    private def assimilation(name: String, description: String, filePath: FilePath) = new Assimilation(Some(name), Some(description), false, Seq(DataTypeReference(filePath)), Some(1), Some(1), None)
-    val Money = {
-      val name = "MONEY"
-      val dt = new DataType(presetPath(name), name, Some("The preset monetary amount type."), Seq(
-        assimilation("Amount", "The value of the monetary amount - i.e. The number without the currency.", DecimalNumber.filePath),
-        assimilation("Currency", "The 3 character currency code (ISO 4217) for the monetary amount.", Code3.filePath)), false) {
-        override val preset = true
-      }
-      presetDataTypes += dt
-      dt
-    }
-    lazy val All = presetDataTypes.toSet
-  }
 }
 
 case class RelativeJoinedAssimilationPath[J <: JoinedAssimilationPath](japOption: Option[J] = None) {
@@ -311,7 +269,7 @@ object JoinedAssimilationPath {
 
 case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int = 0, defaultMaximumOccurences: Option[Int] = Some(1)) {
   implicit val _ = this
-  val dataTypes = definedDataTypes ++ Preset.DataType.All
+  val dataTypes = definedDataTypes
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   lazy val orientatingDataTypes = {
     val initialOrientatingDataTypes = {
@@ -340,7 +298,7 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
     }
     initialOrientatingDataTypes ++ selectedLoopBreakingDataTypes
   }
-  def rootDataTypes = dataTypes.filter(dt => dt.selfAssimilations.isEmpty && !dt.preset)
+  def rootDataTypes = dataTypes.filter(dt => dt.selfAssimilations.isEmpty)
   def effectiveStrength(absoluteAssimilation: AbsoluteAssimilation, dataTypeReference: DataTypeReferenceLike)(implicit model: Model): AssimilationStrength = {
     val absoluteDtr = dataTypeReference.toAbsolute(absoluteAssimilation)
     val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeReferences(dt)).find(_.filePath == dt.filePath).isDefined)

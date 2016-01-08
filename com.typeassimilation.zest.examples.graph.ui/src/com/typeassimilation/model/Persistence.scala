@@ -12,7 +12,7 @@ import com.typeassimilation.implicits.EnhancedFile._
 object DataTypePersistence {
   val FileExtension = ".type.xml"
   val UnboundedLimitName = "UNBOUNDED"
-  def files(directory: File) = directory.listFiles.filter(_.getName.endsWith(FileExtension)).toSeq
+  def files(directory: File): Seq[File] = directory.listFiles.filter(f => f.isFile && f.getName.endsWith(FileExtension)) ++ directory.listFiles.filter(_.isDirectory).flatMap(files)
   def toXml(dataType: DataType) =
     <type>
       <name>{ dataType.name }</name>
@@ -91,7 +91,7 @@ object ModelPesistence {
   def files(directory: File) = DataTypePersistence.files(directory)
   def writeDirectory(model: Model, directory: File): Unit = {
     files(directory).foreach(_.delete)
-    model.dataTypes.filter(!Preset.DataType.All.contains(_)).foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
+    model.dataTypes.foreach(dt => FileUtils.writeStringToFile(dt.filePath.toFile(directory), xmlPrettyPrint(DataTypePersistence.toXml(dt))))
   }
   def readDirectory(directory: File): Model = new Model(
     DataTypePersistence.files(directory).map(f => DataTypePersistence.fromFile(f.relativeTo(directory), directory)).toSet)
