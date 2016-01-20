@@ -26,7 +26,7 @@ object RelationalModel {
     implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
     config.primaryKeyPolicy.modifyPrimaryKeys(
-       logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, Seq(), logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
+       logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
        logicalRelationalModel.config.namingPolicy.tableName(logicalTable),
        logicalTable,
        logicalRelationalModel)
@@ -45,11 +45,11 @@ object RelationalModel {
        name = descriptor.name,
        description = config.namingPolicy.tableDescription(logicalTable),
        columns = descriptor.primaryKeys ++
-         logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, Seq(), logicalTable, logicalRelationalModel)),
+         logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)),
        assimilationPath = logicalTable.assimilationPath
     )
   }
-  def columns(columnGroup: ColumnGroup, repeatIndexes: Seq[Int], parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
+  def columns(columnGroup: ColumnGroup, parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
     implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
     def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && (columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath).japOption match {
@@ -60,10 +60,14 @@ object RelationalModel {
     })
     import ColumnGroup._
     columnGroup match {
-      case Repeated(columnGroup, repeats) => (1 to repeats).flatMap(index => columns(columnGroup, repeatIndexes :+ index, parentLogicalTable, logicalRelationalModel))
+      case Repeated(columnGroup, repeats) => (1 to repeats).map(AssimilationPath.MultiplicityRange.forOnly).flatMap(newRange => columns(columnGroup.withAssimilationPath(columnGroup.assimilationPath match {
+        case at:JoinedAssimilationPath.AssimilationTip => at.withRange(newRange)
+        case dtt:JoinedAssimilationPath.DataTypeTip if dtt.parents.size == 1 => dtt.parents.head.withRange(newRange) + dtt.tip
+        case ap => throw new UnsupportedOperationException(s"Cannot repeat ColumnGroup with AssimilationPath: $ap")
+      }), parentLogicalTable, logicalRelationalModel))
       case sc: SimpleColumn => Seq(Column(
-          name = config.namingPolicy.columnName(parentLogicalTable, sc.assimilationPath, repeatIndexes),
-          description = config.namingPolicy.columnDescription(parentLogicalTable, sc.assimilationPath, repeatIndexes),
+          name = config.namingPolicy.columnName(parentLogicalTable, sc.assimilationPath),
+          description = config.namingPolicy.columnDescription(parentLogicalTable, sc.assimilationPath),
           `type` = sc.columnType, 
           isGenerated = false,
           isNullable = nullable,
@@ -80,15 +84,15 @@ object RelationalModel {
               },
               assimilationPath = e.assimilationPath)
         }
-        columns(SimpleColumn(e.assimilationPath, ColumnType(config.enumerationColumnType.replaceAllLiterally("[SIZE]", enumeration.maximumValueSize.toString))), repeatIndexes, parentLogicalTable, logicalRelationalModel).map(_.copy(
+        columns(SimpleColumn(e.assimilationPath, ColumnType(config.enumerationColumnType.replaceAllLiterally("[SIZE]", enumeration.maximumValueSize.toString))), parentLogicalTable, logicalRelationalModel).map(_.copy(
           enumeration = Some(enumeration)
         ))
-      case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, repeatIndexes, parentLogicalTable, logicalRelationalModel)) 
+      case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, parentLogicalTable, logicalRelationalModel)) 
       case cr: ChildReference => 
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(cr), logicalRelationalModel)
         referencedTable.primaryKeys.map(pk => Column(
-          name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk, repeatIndexes),
-          description = config.namingPolicy.foreignKeyColumnDescription(parentLogicalTable, cr.assimilationPath, pk, repeatIndexes),
+          name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk),
+          description = config.namingPolicy.foreignKeyColumnDescription(parentLogicalTable, cr.assimilationPath, pk),
           `type` = pk.`type`,
           isGenerated = pk.isGenerated,
           isNullable = nullable,

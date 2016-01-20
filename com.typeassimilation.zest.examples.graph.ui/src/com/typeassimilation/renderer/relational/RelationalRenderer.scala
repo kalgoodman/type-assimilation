@@ -7,6 +7,7 @@ object RelationalRenderer {
   sealed trait ColumnGroup {
     type T <: ColumnGroup
     def assimilationPath: JoinedAssimilationPath
+    def withAssimilationPath(jap: JoinedAssimilationPath): T
     def technicalDescription(logicalTable: LogicalTable, prefix: String = "")(implicit model: Model) : String
     def size: Int
     def canMergeWith(that: ColumnGroup): Boolean = this.getClass == that.getClass && assimilationPath.tipEither == that.assimilationPath.tipEither
@@ -17,12 +18,14 @@ object RelationalRenderer {
     case class Repeated(columnGroup: ColumnGroup, repeats: Int) extends ColumnGroup {
       type T = Repeated
       def assimilationPath = columnGroup.assimilationPath
+      def withAssimilationPath(jap: JoinedAssimilationPath) = copy(columnGroup = columnGroup.withAssimilationPath(jap))
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"$prefix${repeats} x { ${columnGroup.technicalDescription(logicalTable)} }"
       def doMerge(thisColumnGroup: Repeated, thatColumnGroup: Repeated): Repeated = thisColumnGroup.copy(columnGroup = columnGroup.mergeWith(thatColumnGroup.columnGroup))
       def size = columnGroup.size * repeats
     }
     case class NestedTable(assimilationPath: JoinedAssimilationPath, columnGroups: Seq[ColumnGroup]) extends ColumnGroup {
       type T = NestedTable
+      def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap, columnGroups = columnGroups.map(cg => cg.withAssimilationPath(cg.assimilationPath.substituteParent(jap))))
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}NESTED: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" + (if (columnGroups.isEmpty) "" else s" {\n${columnGroups.map(_.technicalDescription(logicalTable, prefix + "  ")).mkString(s"\n")}\n$prefix}")
       def doMerge(thisColumnGroup: NestedTable, thatColumnGroup: NestedTable): NestedTable = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath, columnGroups = (thisColumnGroup.columnGroups zip thatColumnGroup.columnGroups).map {
         case (thisCg, thatCg) => thisCg.mergeWith(thatCg)  
@@ -31,18 +34,21 @@ object RelationalRenderer {
     }
     case class SimpleColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip, columnType: ColumnType) extends ColumnGroup {
       type T = SimpleColumn
+      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [$assimilationPath]"
       def doMerge(thisColumnGroup: SimpleColumn, thatColumnGroup: SimpleColumn): SimpleColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class EnumerationColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip) extends ColumnGroup {
       type T = EnumerationColumn
+      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}ENUMERATION: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" 
       def doMerge(thisColumnGroup: EnumerationColumn, thatColumnGroup: EnumerationColumn): EnumerationColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class ParentReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ParentReference
+      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]" 
       def doMerge(thisColumnGroup: ParentReference, thatColumnGroup: ParentReference): ParentReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
       def size = 1
@@ -56,6 +62,7 @@ object RelationalRenderer {
     }
     case class ChildReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ChildReference
+      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Child reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]"
       def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
       def size = 1
@@ -93,9 +100,15 @@ object RelationalRenderer {
     }) else throw new IllegalStateException(s"Cannot merge $this with $that.")
   }
   case class LogicalRelationalModel(tables: Set[LogicalTable], model: Model, config: Config) {
-    private val assimilationPathToTableMap: Map[JoinedAssimilationPath, LogicalTable] = tables.flatMap(lt => lt.assimilationPaths.map(ap => ap -> lt)).toMap
-    def follow(parentReference: ColumnGroup.ParentReference) = assimilationPathToTableMap(parentReference.parentAssimilationPath)
-    def follow(childReference: ColumnGroup.ChildReference)(implicit model: Model) = assimilationPathToTableMap(childReference.childAssimilationPath)
+    private val assimilationPathToTableMap: mutable.Map[JoinedAssimilationPath, LogicalTable] = mutable.Map(tables.flatMap(lt => lt.assimilationPaths.map(ap => ap -> lt)).toArray:_*)
+    private def logicalTable(assimilationPath: JoinedAssimilationPath) = assimilationPathToTableMap.getOrElseUpdate(assimilationPath, {
+      assimilationPathToTableMap.keysIterator.find(_.covers(assimilationPath)) match {
+        case Some(ap) => assimilationPathToTableMap(ap)
+        case None => throw new IllegalArgumentException(s"There is are LogicalTables that account for AssimilationPath $assimilationPath")
+      }
+    })
+    def follow(parentReference: ColumnGroup.ParentReference) = logicalTable(parentReference.parentAssimilationPath)
+    def follow(childReference: ColumnGroup.ChildReference)(implicit model: Model) = logicalTable(childReference.childAssimilationPath)
     override def toString = tables.map(_.technicalDescription(model)).mkString("\n")
   }
   
@@ -153,10 +166,10 @@ object RelationalRenderer {
   trait NamingPolicy {
     def tableName(logicalTable: LogicalTable)(implicit config: Config, model: Model): String
     def tableDescription(logicalTable: LogicalTable)(implicit config: Config, model: Model): Option[String]
-    def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String
-    def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String]
-    def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String
-    def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String]
+    def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): String
+    def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): Option[String]
+    def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): String
+    def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): Option[String]
     def parentForeignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): String
     def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): Option[String]
     def enumerationName(assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): String
@@ -177,17 +190,17 @@ object RelationalRenderer {
           "NUMBER" -> "NO",
           "COUNT" -> "CNT"
         ).withDefault(s => s)
-      private def underscoreDelimitedName(s: String) = mutable.LinkedHashSet(s.trim.replaceAll("\\s+", "_").toUpperCase.split('_'): _*).map(shorten).mkString("_")
+      private def underscoreDelimitedName(s: String) = s.trim.replaceAll("\\s+", "_").toUpperCase.split('_').map(shorten).mkString("_")
       def tableName(logicalTable: LogicalTable)(implicit config: Config, model: Model): String = underscoreDelimitedName(AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath))
       def tableDescription(logicalTable: LogicalTable)(implicit config: Config, model: Model): Option[String] = logicalTable.assimilationPath.tipDescription
-      def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String = underscoreDelimitedName(relativeName(parentLogicalTable.assimilationPath, assimilationPath)) + repeatIndexes.map("_" + _).mkString("")
-      def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
-      def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): String = {
-        val namesInFirstOccurenceOrder = mutable.LinkedHashSet(columnName(parentLogicalTable, assimilationPath, repeatIndexes).split('_'):_*)
+      def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): String = underscoreDelimitedName(relativeName(parentLogicalTable.assimilationPath, assimilationPath))
+      def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription
+      def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): String = {
+        val namesInFirstOccurenceOrder = mutable.LinkedHashSet(columnName(parentLogicalTable, assimilationPath).split('_'):_*)
         namesInFirstOccurenceOrder ++= referencePrimaryKeyColumn.name.split('_')
-        namesInFirstOccurenceOrder.mkString("_") + repeatIndexes.map("_" + _).mkString("")
+        namesInFirstOccurenceOrder.mkString("_")
       }
-      def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column, repeatIndexes: Seq[Int])(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription 
+      def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): Option[String] = assimilationPath.tipDescription 
       def parentForeignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): String = referencePrimaryKeyColumn.name
       def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config, model: Model): Option[String] = referencePrimaryKeyColumn.description.map("Reference to " + _)
       def enumerationName(assimilationPath: JoinedAssimilationPath)(implicit config: Config, model: Model): String = AssimilationPathUtils.name(assimilationPath.tipEither).replaceAll("\\s+", "")

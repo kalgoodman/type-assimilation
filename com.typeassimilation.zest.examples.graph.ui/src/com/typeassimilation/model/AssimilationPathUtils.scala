@@ -4,14 +4,22 @@ object AssimilationPathUtils {
   val DefaultAssimilationName = "Type"
   def name(assimilationPath: AssimilationPath)(implicit model: Model): String = {
     import AssimilationPath._
+    def multiplicitySuffix(ap: AssimilationPath) = ap match {
+      case at:AssimilationTip if !at.coversRange => " " + at.multiplicityRange.inclusiveLowerBound.toString + 
+      (at.multiplicityRange.inclusiveUpperBound match {
+        case None => " or more"
+        case Some(upper) => if (at.multiplicityRange.inclusiveLowerBound == upper) "" else s" to $upper"  
+      })
+      case _ => ""
+    }
     def dtNameElement(dtt: DataTypeTip): Option[String] = dtt.parent match {
       case Some(atParent) => if (atNameElement(atParent).isDefined) None else {
-        if (atParent.tip.assimilation.dataTypeReferences.size > 1) Some(dtt.tip.name)
+        if (atParent.tip.assimilation.dataTypeReferences.size > 1) Some(dtt.tip.name + multiplicitySuffix(atParent))
         else None
       }
       case None => Some(dtt.tip.name)
     }
-    def atNameElement(at: AssimilationTip): Option[String] = at.tip.assimilation.name
+    def atNameElement(at: AssimilationTip): Option[String] = at.tip.assimilation.name.map(_ + multiplicitySuffix(at))
     def nameElement(ap: AssimilationPath) = ap match {
       case at:AssimilationTip => atNameElement(at)
       case dt:DataTypeTip => dtNameElement(dt)
