@@ -52,7 +52,7 @@ object RelationalModel {
   def columns(columnGroup: ColumnGroup, parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
     implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
-    def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && (columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath).japOption match {
+    def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && (columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath) match {
       case None => true
       case Some(jap) => jap.commonAssimilationPath.tipEither match {
         case Right(aa) => aa.assimilation.minimumOccurences.getOrElse(0) < 1

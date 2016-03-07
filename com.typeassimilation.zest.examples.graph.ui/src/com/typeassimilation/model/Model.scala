@@ -9,7 +9,7 @@ import com.typeassimilation.implicits.EnhancedSeq.Implicits._
 import scala.collection.mutable
 import scalafx.collections.ObservableBuffer
 import scalafx.collections.ObservableSet
-import scala.collection.mutable
+import scala.collection.immutable.ListSet
 import scalafx.beans.Observable
 import java.io.File
 import FilePath.Implicits._
@@ -18,6 +18,7 @@ case class DataType(val filePath: FilePath.Absolute, name: String, description: 
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
   def selfAssimilations(implicit model: Model) = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeReferences.map(_.filePath).contains(filePath))
   def isEffectivelyOrientating(implicit model: Model) = isOrientating || model.orientatingDataTypes.contains(this)
+  def loops(implicit model: Model) = model.loops(this)
   def identifyingAssimilations = assimilations.filter(_.isIdentifying)
 }
 
@@ -46,7 +47,6 @@ object AssimilationStrength {
 sealed trait DataTypeReferenceLike {
   def filePath: FilePath
   def strength: Option[AssimilationStrength]
-  def effectiveStrength(absoluteAssimilation: AbsoluteAssimilation)(implicit model: Model) = model.effectiveStrength(absoluteAssimilation, this)
   def toAbsolute(dataType: DataType): AbsoluteDataTypeReference
   def toAbsolute(absoluteAssimilation: AbsoluteAssimilation): AbsoluteDataTypeReference = toAbsolute(absoluteAssimilation.dataType)
 }
@@ -65,72 +65,142 @@ case class Assimilation(name: Option[String], description: Option[String], isIde
 case class AbsoluteAssimilation(dataType: DataType, assimilation: Assimilation) {
   def dataTypeReferences = assimilation.absoluteDataTypeReferences(dataType)
   def dataTypes(implicit model: Model) = dataTypeReferences.flatMap(dtr => model.dataTypeOption(dtr.filePath))
+  def referenceOption(dataType: DataType) = dataTypeReferences.find(_.filePath == dataType.filePath) 
   override def toString = s"${dataType.name} (${dataType.filePath}) -> ${assimilation}"
 }
 
-case class RelativeJoinedAssimilationPath[J <: JoinedAssimilationPath](japOption: Option[J] = None) {
-  def isEmpty = japOption.isDefined
-  def joinedAssimilationPath = japOption.get
+sealed trait BrokenAssimilationPath {
+  def parent: Option[BrokenAssimilationPath]
+  def tipEither: Either[DataType, AbsoluteAssimilation] 
+  def contiguousParent = parent match {
+    case None => false
+    case Some(p) => (tipEither, p.tipEither) match {
+      case (Right(thisAa), Left(parentDt)) => thisAa.dataType == parentDt
+      case (Left(thisDt), Right(parentAa)) => parentAa.dataTypeReferences.map(_.filePath).contains(thisDt.filePath)
+      case _ => false
+    }
+  }
+  def withParent(parentBap: BrokenAssimilationPath): BrokenAssimilationPath
+  def withNoParent: BrokenAssimilationPath
+  lazy val toSeq = {
+    def recurse(currentBap: BrokenAssimilationPath): Seq[BrokenAssimilationPath] = currentBap.parent match {
+      case None => Seq(currentBap)
+      case Some(p) => recurse(p) :+ currentBap
+    } 
+    recurse(this)    
+  }
+  def length = toSeq.size
+  def &(that: BrokenAssimilationPath): Option[BrokenAssimilationPath] = {
+    val thatTipToBapMap = that.toSeq.map(bap => bap.tipEither -> bap).toMap
+    toSeq.foldLeft(Option.empty[BrokenAssimilationPath]) {
+      (previousParent, bap) =>
+        thatTipToBapMap.get(bap.tipEither) match {
+          case Some(thatBap) =>
+            import BrokenAssimilationPath._
+            bap match {
+              case dtt: DataTypeTip => Some(DataTypeTip(previousParent, dtt.tip))
+              case at: AssimilationTip => Some(AssimilationTip(previousParent, at.tip, at.multiplicityRanges ++ thatBap.asInstanceOf[AssimilationTip].multiplicityRanges))
+            }
+          case None => previousParent
+        }
+    }
+  }
+  override def toString = parent.map {_.toString + (if (contiguousParent) " ---> " else " -||-> ") }.getOrElse("") + tipToString
+  protected def tipToString: String
+  def commonTipLength(that: BrokenAssimilationPath): Int =
+    if (this.tipEither == that.tipEither) (this.parent, that.parent) match {
+      case (Some(thisP), Some(thatP)) => 1 + thisP.commonTipLength(thatP)
+      case _ => 1
+    }
+    else 0
 }
-object RelativeJoinedAssimilationPath {
-  def apply[J <: JoinedAssimilationPath](joinedAssimilationPath: J): RelativeJoinedAssimilationPath[J] = RelativeJoinedAssimilationPath(Some(joinedAssimilationPath))
+object BrokenAssimilationPath {
+  case class DataTypeTip(parent: Option[BrokenAssimilationPath], tip: DataType) extends BrokenAssimilationPath {
+    val tipEither = Left(tip)
+    def withParent(parentBap: BrokenAssimilationPath) = copy(parent = Some(parentBap))
+    def withNoParent = copy(parent = None)
+    def tipToString = tip.name
+  }
+  case class AssimilationTip(parent: Option[BrokenAssimilationPath], tip: AbsoluteAssimilation, multiplicityRanges: Set[AssimilationPath.MultiplicityRange]) extends BrokenAssimilationPath {
+    val tipEither = Right(tip)
+    def withParent(parentBap: BrokenAssimilationPath) = copy(parent = Some(parentBap))
+    def withNoParent = copy(parent = None)
+    def multiplicityRangeLimits = AssimilationPath.MultiplicityRange(multiplicityRanges)
+    def coversRange(implicit model: Model) = multiplicityRangeLimits.contains(tip.assimilation.maximumMultiplicityRange)
+    def tipToString = tip.assimilation.name.getOrElse("<ANONYMOUS>") + "{" + multiplicityRanges.toSeq.sortBy(_.inclusiveLowerBound).mkString(",") + "}"
+  }
+  def apply(assimilationPath: AssimilationPath): BrokenAssimilationPath = { 
+    val apIter = assimilationPath.toSeq.iterator
+    def bap(p: Option[BrokenAssimilationPath], ap: AssimilationPath) = ap match {
+      case dtt: AssimilationPath.DataTypeTip => DataTypeTip(p, dtt.tip)
+      case at: AssimilationPath.AssimilationTip => AssimilationTip(p, at.tip, Set(at.multiplicityRange))
+    }
+    apIter.foldLeft(bap(None, apIter.next))((finalBap, ap) => bap(Some(finalBap), ap))
+  }
+  def apply(baps: Seq[BrokenAssimilationPath]): BrokenAssimilationPath = {
+    val bapsIter = baps.iterator
+    baps.foldLeft(bapsIter.next.withNoParent)((finalBap, currentBap) => currentBap.withParent(finalBap))
+  }
+  object Implicits {
+    implicit def assimilationPathToBrokenAssimilationPath(ap: AssimilationPath) = apply(ap)
+  }
 }
-case class RelativeAssimilationPath[A <: AssimilationPath](apOption: Option[AssimilationPath] = None) {
-  def isEmpty = apOption.isDefined
-  def assimilationPath = apOption.get
-  def toSeq = if(isEmpty) Seq() else assimilationPath.toSeq
-}
-object RelativeAssimilationPath {
-  def apply[A <: AssimilationPath](assimilationPath: AssimilationPath): RelativeAssimilationPath[A] = RelativeAssimilationPath(Some(assimilationPath))
-}
-
-// TODO Glean any remaining value from this code and remove
-//case class AssimilationPathOld[T](parent: Option[AssimilationPath[Nothing]], tip: Either[DataType, AbsoluteAssimilation]) {
-//  def ancestorThat(predicate: (Either[DataType, AbsoluteAssimilation]) => Boolean): Option[AssimilationPath[_]] = {
-//    def recurse(currentAp: AssimilationPath[_]): Option[AssimilationPath[_]] = 
-//       if (predicate(currentAp.tip)) Some(currentAp)
-//       else currentAp.parent.flatMap(recurse(_)) 
-//    recurse(this)
-//  }
-//  def descendentsThat(predicate: (Either[DataType, AbsoluteAssimilation]) => Boolean)(implicit model: Model): Seq[AssimilationPath[_]] =
-//    model.descendentsThat(this, predicate)
-//  def tipStrengthOption: Option[AssimilationStrength] = tip match {
-//    case Left(dt) => assimilationParent.flatMap(_.tipAssimilation.dataTypeReferences.find(_.filePath == dt.filePath).flatMap(_.strength))
-//    case Right(a) => throw new IllegalStateException(s"Only DataType AssimilationPaths can have tip defined assimilation strength.")
-//  }
-//  def effectiveStrength(dataTypeReference: AbsoluteDataTypeReference)(implicit model: Model): AssimilationStrength =
-//    dataTypeReference.strength match {
-//      case Some(strength) => strength
-//      case None => tip match {
-//        case Left(dataType) => throw new IllegalStateException(s"The current must be an assimilation to assess a data type reference strength.")
-//        case Right(assimilation) =>
-//          if (dataTypeReference.dataType.isOrientating) AssimilationStrength.Reference
-//          else {
-//            val forwardLoopingRaps = descendentsThat(_ match {
-//              case Right(a) => a.dataTypeReferences.find(_.filePath == dataTypeReference.filePath).isDefined
-//              case _ => false
-//            }).map(_.relativeTo(this))
-//            val loopParentOption = ancestorThat(_ match {
-//              case Right(a) => a.dataTypeReferences.find(_.filePath == dataTypeReference.filePath).isDefined
-//              case _ => false
-//            })
-//            ???
-//          }
-//      } 
-//    }
-//}
-
 
 sealed trait AssimilationPath {
   import AssimilationPath._
   def tipEither: Either[DataType, AbsoluteAssimilation]
+  def head = toSeq.head
   def parent: Option[AssimilationPath]
   def children(implicit model: Model): Iterable[AssimilationPath]
   def singleChild(implicit model: Model): AssimilationPath
+  def isAbsolute = head.tipEither match {
+    case Left(dt) => dt.isOrientating
+    case _ => false
+  }
+  /**
+   * All parents which are the start of this loop
+   */
+  def loopBackStarts: Iterable[AssimilationPath] = ListSet(ancestorsThat(ap => ap.tipEither == tipEither && ap != this):_*)
+  def loopsBack = !loopBackStarts.isEmpty
+  /**
+   * Descendant AssimilationPaths that loop back to this AssimilationPath's tip.
+   */
+  def descendantLoopBacks(implicit model: Model) = descendantsThat(_.loopBackStarts.contains(this))
+  /**
+   * Compares to another AssimilationPath and decides if they represent the same loop
+   */
+  def isSameLoop(that: AssimilationPath): Boolean = if (that.isChildOf(this)) containsSeq(that.toSeq(this)) else false
+  def isLoop = tipEither == head.tipEither
+  def loopEquals(that: AssimilationPath): Boolean = that.isLoop && that.toSeq.map(_.tipEither).toSet == toSeq.map(_.tipEither).toSet
+  def contains(tipEither: Either[DataType, AbsoluteAssimilation]) = lastIndexOf(_.tipEither == tipEither) > -1
+  def containsSeq(thatSeq: Seq[AssimilationPath]): Boolean =
+    if (thatSeq.isEmpty) true
+    else {
+      val firstIndex = toSeq.indexWhere(_.tipEither == thatSeq.head.tipEither)
+      if (firstIndex == -1) false
+      else {
+        val thisSeqReduced = toSeq.drop(firstIndex).take(thatSeq.size)
+        if (thisSeqReduced.size != thatSeq.size) false 
+        else (thisSeqReduced zip thatSeq).foldLeft(true) { case (result, (thisAp, thatAp)) => result && thisAp.tipEither == thatAp.tipEither }
+      }
+    }
+  def nextFollowing(assimilationPath: AssimilationPath): AssimilationPath = assimilationPath.toSeq(this).head
   def hasSingleChild: Boolean
   def tipDisplayName: String
   def tipDisplayDescription: Option[String]
-  def indexOf(predicate: AssimilationPath => Boolean): Int = {
+  def descendantsThat(predicate: AssimilationPath => Boolean)(implicit model: Model): Seq[AssimilationPath]
+  def descendants(implicit model: Model): Seq[AssimilationPath]
+  def ancestorsThat(predicate: AssimilationPath => Boolean): Seq[AssimilationPath] = {
+    def recurse(currentAp: AssimilationPath, found: Seq[AssimilationPath]): Seq[AssimilationPath] = {
+      val nowFound = if (predicate(currentAp)) found :+ currentAp else found
+      currentAp.parent match {
+        case None => nowFound
+        case Some(p) => recurse(p, nowFound)
+      }
+    }
+    recurse(this, Seq())
+  }
+  def lastIndexOf(predicate: AssimilationPath => Boolean): Int = {
     def recurse(currentAp: AssimilationPath, index: Int): Int = 
       if (predicate(currentAp)) index
       else currentAp.parent match {
@@ -139,6 +209,7 @@ sealed trait AssimilationPath {
       }
     recurse(this, length - 1)
   }
+  def indexesOf(predicate: AssimilationPath => Boolean): Seq[Int] = toSeq.zipWithIndex.filter(ap => predicate(ap._1)).map(_._2)
   def covers(that: AssimilationPath): Boolean =
     tipEither == that.tipEither &&
     length == that.length &&
@@ -148,23 +219,19 @@ sealed trait AssimilationPath {
         case _ => true
       })
     }
-  def isChildOf(ap: AssimilationPath): Boolean = indexOf(_ == ap) > -1
+  def isChildOf(ap: AssimilationPath): Boolean = lastIndexOf(_ == ap) > -1
   def substituteParent(parent: AssimilationPath): AssimilationPath =
-    indexOf(_.tipEither == parent.tipEither) match {
+    lastIndexOf(_.tipEither == parent.tipEither) match {
       case -1 => throw new IllegalArgumentException(s"No substitutable parent found.")
       case n => AssimilationPath(Some(parent), toSeq.drop(n + 1))
     }
   def withParent(parent: AssimilationPath): AssimilationPath
   def withNoParent: AssimilationPath
-  def +[A <: AssimilationPath](relativeAssimilationPath: RelativeAssimilationPath[A])(implicit model: Model): A =
-    relativeAssimilationPath.apOption match {
-      case None => throw new IllegalArgumentException(s"Cannot add an empty relative path as there is no gurantee of type consistency.")
-      case Some(ap) => AssimilationPath(Some(this), ap.toSeq).asInstanceOf[A]
-    } 
-  def relativeTo(parentAp: AssimilationPath): RelativeAssimilationPath[this.type] = if (isChildOf(parentAp)) {
+  def +[A <: AssimilationPath](relativeAssimilationPath: A)(implicit model: Model): A = AssimilationPath(Some(this), relativeAssimilationPath.toSeq).asInstanceOf[A]
+  def relativeTo(parentAp: AssimilationPath): Option[this.type] = if (isChildOf(parentAp)) {
     val relativePathIter = toSeq.drop(parentAp.toSeq.size).iterator
-    if (relativePathIter.isEmpty) RelativeAssimilationPath[this.type]()
-    else RelativeAssimilationPath[this.type](AssimilationPath(None, relativePathIter.toSeq))
+    if (relativePathIter.isEmpty) None
+    else Some(AssimilationPath(None, relativePathIter.toSeq).asInstanceOf[this.type])
   } else throw new IllegalArgumentException(s"$this is not a child of $parentAp.")
   lazy val toSeq = {
     def recurse(currentAp: AssimilationPath): Seq[AssimilationPath] = currentAp.parent match {
@@ -173,6 +240,7 @@ sealed trait AssimilationPath {
     }
     recurse(this)
   }
+  def toSeq(fromParent: AssimilationPath): Seq[AssimilationPath] = if (isChildOf(fromParent)) toSeq.drop(fromParent.length) else throw new IllegalArgumentException(s"The $fromParent is not a parent of $this.")
   def length = toSeq.size
   def commonTipLength(ap: AssimilationPath) = {
     def recurse(thisTip: AssimilationPath, thatTip: AssimilationPath, currentLength: Int): Int = if (thisTip.tipEither == thatTip.tipEither) {
@@ -181,8 +249,17 @@ sealed trait AssimilationPath {
     } else currentLength
     recurse(this, ap, 0)
   }
+  def toResolvedString(implicit model: Model): String
 }
 object AssimilationPath {
+  object Implicits {
+    implicit class AssimilationPathSet(apSet: Set[AssimilationPath]) {
+      def shortestOption = apSet.toSeq.sortBy(_.length).headOption
+      def shortest = shortestOption.get
+      def containsTip(tipEither: Either[DataType, AbsoluteAssimilation]) = apSet.foldLeft(false)((doesContain, ap) => doesContain || ap.contains(tipEither))
+    }
+  }
+
   case class DataTypeTip private[AssimilationPath](parent: Option[AssimilationTip], tip: DataType) extends AssimilationPath {
     def tipEither = Left(tip)
     def +<(a: Assimilation, multiplicityRange: MultiplicityRange)(implicit model: Model): AssimilationTip = AssimilationTip(Some(this), AbsoluteAssimilation(tip, a), multiplicityRange)
@@ -194,14 +271,30 @@ object AssimilationPath {
       case _ => throw new IllegalArgumentException(s"DataType Tip AssimilationPaths can only has Assimilation Tip parents.")
     }
     def withNoParent = copy(parent = None)
+    def descendantsThat(predicate: AssimilationPath => Boolean)(implicit model: Model): Seq[AssimilationPath] = {
+      val currentSeq = if(predicate(this)) Seq(this) else Seq()
+      if (this.loopsBack) currentSeq
+      else currentSeq ++ this.children.flatMap(_.descendantsThat(predicate))
+    }
+    def descendants(implicit model: Model) = descendantsThat(_.children.isEmpty)
+    override lazy val loopBackStarts = super.loopBackStarts.asInstanceOf[ListSet[DataTypeTip]]
+    override def descendantLoopBacks(implicit model: Model) = super.descendantLoopBacks.asInstanceOf[Seq[DataTypeTip]]
+    override def nextFollowing(assimilationPath: AssimilationPath) = super.nextFollowing(assimilationPath).asInstanceOf[AssimilationTip]
     override def substituteParent(parent: AssimilationPath): DataTypeTip = super.substituteParent(parent).asInstanceOf[DataTypeTip]
     def children(implicit model: Model): Set[AssimilationTip] = tip.absoluteAssimilations.map(this + _).toSet
     def singleChild(implicit model: Model): AssimilationTip = if (hasSingleChild) this + tip.assimilations.head else throw new IllegalStateException(s"$this has multiple child paths!")
+    def parentDataTypeReference(implicit model: Model) = parent.flatMap(p => p.tip.dataTypeReferences.find(_.filePath == tip.filePath))
+    def effectiveAssimilationStrength(implicit model: Model) = parentDataTypeReference.map(parentRef => parent.get.effectiveStrength(parentRef))
     def hasSingleChild = tip.assimilations.size == 1
     def tipDisplayName: String = parent.flatMap(_.tip.assimilation.name).getOrElse(tip.name)
     def tipDisplayDescription: Option[String] = tip.description
     def isReferenceToOrientatingDataType(implicit model: Model) = tip.isEffectivelyOrientating && length > 1
-    override def toString = parent.map(_.toString + " => ").getOrElse("") + s"${tip.name} (${tip.filePath})"
+    private def tipContent = s"${tip.name} (${tip.filePath})"
+    override def toString = parent.map(_.toString + " => ").getOrElse("") + tipContent
+    def toResolvedString(implicit model: Model) = parent.map(_.toResolvedString + (parentDataTypeReference.get.strength match {
+      case None => s" =(${effectiveAssimilationStrength.get})=> "
+      case Some(strength) => s" =[$strength]=> "
+    })).getOrElse("") + tipContent
   }
   
   case class MultiplicityRange(inclusiveLowerBound: Int, inclusiveUpperBound: Option[Int]) {
@@ -233,6 +326,14 @@ object AssimilationPath {
     def optionallyUpTo(inclusiveUpperBound: Int) = MultiplicityRange(0, Some(inclusiveUpperBound))
     def from(inclusiveLowerBound: Int) = MultiplicityRange(inclusiveLowerBound, None)
     def between(inclusiveLowerBound: Int, inclusiveUpperBound: Int) = MultiplicityRange(inclusiveLowerBound, Some(inclusiveUpperBound))
+    def apply(multiplicityRanges: Iterable[MultiplicityRange]): MultiplicityRange = {
+      def maxLimits(mr1: MultiplicityRange, mr2: MultiplicityRange) = MultiplicityRange(Math.min(mr1.inclusiveLowerBound, mr2.inclusiveLowerBound), (mr1.inclusiveUpperBound, mr2.inclusiveUpperBound) match {
+        case (bound1, bound2) if bound1.isEmpty || bound2.isEmpty => None
+        case (Some(upper1), Some(upper2)) => Some(Math.max(upper1, upper2))
+      })
+      val rangeIter = multiplicityRanges.iterator
+      rangeIter.foldLeft(rangeIter.next)((combinedRange, range) => maxLimits(combinedRange, range))
+    }
     object Implicits {
       implicit def intToMultiplicityRange(index: Int) = forOnly(index)
       implicit def tupleToMultiplicityRange(tuple: (Int, Int)) = between(tuple._1, tuple._2)
@@ -241,21 +342,52 @@ object AssimilationPath {
   
   case class AssimilationTip private[AssimilationPath](parent: Option[DataTypeTip], tip: AbsoluteAssimilation, multiplicityRange: MultiplicityRange) extends AssimilationPath {
     def tipEither = Right(tip)  
-    def +(dt: DataType) = DataTypeTip(Some(this), dt)
+    def +(dt: DataType): DataTypeTip = DataTypeTip(Some(this), dt)
+    def +(dtr: AbsoluteDataTypeReference)(implicit model: Model): DataTypeTip = this + dtr.dataType
     def withParent(assimilationPath: AssimilationPath): AssimilationTip = assimilationPath match {
       case dtt: DataTypeTip => copy(parent = Some(dtt))
       case _ => throw new IllegalArgumentException(s"Assimilation Tip AssimilationPaths can only has DataType Tip parents.")
     }
-    override def substituteParent(parent: AssimilationPath): AssimilationTip = super.substituteParent(parent).asInstanceOf[AssimilationTip]
     def withRange(multiplicityRange: MultiplicityRange) = copy(multiplicityRange = multiplicityRange)
     def coversRange(implicit model: Model) = multiplicityRange.contains(tip.assimilation.maximumMultiplicityRange)
     def withNoParent = copy(parent = None)
+    def descendantsThat(predicate: AssimilationPath => Boolean)(implicit model: Model): Seq[AssimilationPath] = {
+      val currentSeq = if(predicate(this)) Seq(this) else Seq()
+      if (this.loopsBack) currentSeq
+      else currentSeq ++ this.children.flatMap(_.descendantsThat(predicate))
+    }
+    def descendants(implicit model: Model) = descendantsThat(_.children.isEmpty)
+    override lazy val loopBackStarts = super.loopBackStarts.asInstanceOf[ListSet[AssimilationTip]]
+    override def descendantLoopBacks(implicit model: Model) = super.descendantLoopBacks.asInstanceOf[Seq[AssimilationTip]]
+    override def nextFollowing(assimilationPath: AssimilationPath) = super.nextFollowing(assimilationPath).asInstanceOf[DataTypeTip]
+    def nextReferenceFollowing(assimilationPath: AssimilationPath) = tip.referenceOption(nextFollowing(assimilationPath).tip).get
+    override def substituteParent(parent: AssimilationPath): AssimilationTip = super.substituteParent(parent).asInstanceOf[AssimilationTip]
     def children(implicit model: Model): Set[DataTypeTip] = tip.dataTypes.map(this + _).toSet
     def singleChild(implicit model: Model): DataTypeTip = if (hasSingleChild) this + tip.dataTypes.head else throw new IllegalStateException(s"$this has multiple child paths!")
     def hasSingleChild = tip.dataTypeReferences.size == 1
+    def effectiveStrength(dataTypeReference: DataTypeReferenceLike)(implicit model: Model): AssimilationStrength = {
+      import AssimilationStrength._
+      val absoluteDtr = dataTypeReference.toAbsolute(tip)
+      absoluteDtr.strength match {
+        case Some(defined) => defined
+        case None =>
+          if (absoluteDtr.dataType.isOrientating) Reference
+          else if (absoluteDtr.dataType.loops.isEmpty) Strong
+          else {
+            import AssimilationPath.Implicits._
+            if (absoluteDtr.dataType.loops.containsTip(Left(tip.dataType))) {
+              val followedDtr = this + absoluteDtr
+              if (followedDtr.loopsBack && followedDtr.loopBackStarts.last.effectiveAssimilationStrength == Weak) Reference
+              else Strong
+            } else Weak
+          }
+      }
+    }
     def tipDisplayName: String = tip.assimilation.name.getOrElse(tip.dataType.name + " Type")
     def tipDisplayDescription: Option[String] = tip.assimilation.description
-    override def toString = parent.map(_.toString + " -> ").getOrElse("") + tip.assimilation.name.getOrElse("<ANONYMOUS>") + multiplicityRange.toString
+    private def tipContent = tip.assimilation.name.getOrElse("<ANONYMOUS>") + multiplicityRange.toString
+    override def toString = parent.map(_.toString + " -> ").getOrElse("") + tipContent
+    def toResolvedString(implicit model: Model) = parent.map(_.toResolvedString + " -> ").getOrElse("") + tipContent
   }
   def apply(dt: DataType): DataTypeTip = DataTypeTip(None, dt)
   def apply(aa: AbsoluteAssimilation)(implicit model: Model): AssimilationTip = AssimilationTip(None, aa, aa.assimilation.maximumMultiplicityRange)
@@ -298,47 +430,38 @@ sealed trait JoinedAssimilationPath {
   def parentToChildMap[P <: JoinedAssimilationPath](parentJap: P) = parentJap.assimilationPaths.map(pap => pap -> assimilationPaths.filter(_.isChildOf(pap)).toSet).toMap
   def childToParentMap[P <: JoinedAssimilationPath](parentJap: P) = parentToChildMap(parentJap).flatMap { case (p, cs) => cs.map(_ -> p) }.toMap
   def isChildOf(parentJap: JoinedAssimilationPath) = childToParentMap(parentJap).size == assimilationPaths.size
-  def +(jap: JoinedAssimilationPath): JoinedAssimilationPath = (this, jap) match {
-    case (thisJap: DataTypeTip, thatJap: DataTypeTip) => thisJap + thatJap
-    case (thisJap: AssimilationTip, thatJap: AssimilationTip) => thisJap + thatJap
+  def |(jap: JoinedAssimilationPath): JoinedAssimilationPath = (this, jap) match {
+    case (thisJap: DataTypeTip, thatJap: DataTypeTip) => thisJap | thatJap
+    case (thisJap: AssimilationTip, thatJap: AssimilationTip) => thisJap | thatJap
     case _ => throw new IllegalArgumentException("You cannot merge JoinedAssimilationPaths with different tip types.")
   }
-  def +[J <: JoinedAssimilationPath](relativeJap: RelativeJoinedAssimilationPath[J])(implicit model: Model): J = relativeJap.japOption match {
-    case None => throw new IllegalArgumentException("You cannot add an empty relative path to a JoinedAssimilationPath.")
-    case Some(jap) if jap.assimilationPaths.size == 1 => {
-      val relativeAp = RelativeAssimilationPath(jap.assimilationPaths.head)
-      JoinedAssimilationPath(assimilationPaths.map(_ + relativeAp).map(_.asInstanceOf[AssimilationPath])).asInstanceOf[J]
-    }
-    case _ => throw new IllegalArgumentException("You can only add a relative path with exactly one AssimilationPath as it is impossible to know which parent to attach to otherwise.")
+  def +[J <: JoinedAssimilationPath](relativeJap: J)(implicit model: Model): J = if (relativeJap.assimilationPaths.size == 1) {
+    val relativeAp = relativeJap.assimilationPaths.head
+    JoinedAssimilationPath(assimilationPaths.map(_ + relativeAp).map(_.asInstanceOf[AssimilationPath])).asInstanceOf[J]
+  } else {
+    throw new IllegalArgumentException("You can only add a relative path with exactly one AssimilationPath as it is impossible to know which parent to attach to otherwise.")
   }
   def covers(thatJap: JoinedAssimilationPath): Boolean = 
     thatJap.assimilationPaths.foldLeft(true)((overallCoverage, thatAp) => overallCoverage && 
         (assimilationPaths.foldLeft(false)((apCovered, thisAp) => apCovered || thisAp.covers(thatAp))))
-  
   def substituteParent(parentJap: JoinedAssimilationPath) = JoinedAssimilationPath({
-    val parentToChildSet = parentJap.assimilationPaths.map(pap => pap -> assimilationPaths.filter(_.indexOf(_.tipEither == pap.tipEither) > -1).toSet)
+    val parentToChildSet = parentJap.assimilationPaths.map(pap => pap -> assimilationPaths.filter(_.lastIndexOf(_.tipEither == pap.tipEither) > -1).toSet)
     parentToChildSet.flatMap { case (p, cs) => cs.map (_.substituteParent(p)) }
   })
-  def commonAssimilationPath: AssimilationPath = {
-    val (longest, rest) = assimilationPaths.map(_.toSeq).toSeq.sortBy(-_.size).splitAt(1)
-    val commonAssimilationPathElements = longest.head.flatMap { ap =>
-      import AssimilationPath._
-      if (rest.foldLeft(true)((present, rap) => present && rap.find(_.tipEither == ap.tipEither).isDefined)) Some(ap)
-      else None
-    }
-    val commonApeIter = commonAssimilationPathElements.iterator
-    commonApeIter.foldLeft(commonApeIter.next.withNoParent)((parentAp, elementAp) => elementAp.withParent(parentAp))
-  }
-  def relativeTo[P <: JoinedAssimilationPath](parentJap: P): RelativeJoinedAssimilationPath[this.type] =
+  def commonAssimilationPath: BrokenAssimilationPath = {
+    val apIter = assimilationPaths.map(BrokenAssimilationPath(_)).iterator
+    apIter.foldLeft(Option(apIter.next))((previousBap, bap) => previousBap.flatMap(_ & bap)).getOrElse(throw new IllegalStateException("JoinedAssimilationPath without a common AssimilationPath - sohuld be impossible!"))
+  }  
+  
+  def relativeTo(parentJap: JoinedAssimilationPath): Option[this.type] =
     if (!isChildOf(parentJap)) throw new IllegalArgumentException(s"$this is not a child of $parentJap!")
     else {
       val childToParent = childToParentMap(parentJap)
-      val japOption = {
-        val apSet = assimilationPaths.map(ap => ap.relativeTo(childToParent(ap))).flatMap(_.apOption)
-        if (apSet.isEmpty) None else Some(JoinedAssimilationPath(apSet))
-      }
-      RelativeJoinedAssimilationPath(japOption.asInstanceOf[Option[this.type]])
+      val apSet = assimilationPaths.map(ap => ap.relativeTo(childToParent(ap))).flatten
+      if (apSet.isEmpty) None else Some(JoinedAssimilationPath(apSet.asInstanceOf[Set[AssimilationPath]])).asInstanceOf[Option[this.type]]
     }
+  def splitByParent: Iterable[JoinedAssimilationPath]
+  def toResolvedString(implicit model: Model) = assimilationPaths.map(_.toResolvedString).mkString(",\n")
 }
 
 object JoinedAssimilationPath {
@@ -346,23 +469,25 @@ object JoinedAssimilationPath {
     type A = AssimilationPath.DataTypeTip
     def tip = assimilationPaths.head.tip
     def tipEither = Left(tip)
-    override lazy val commonAssimilationPath = super.commonAssimilationPath.asInstanceOf[AssimilationPath.DataTypeTip]
+    override lazy val commonAssimilationPath = super.commonAssimilationPath.asInstanceOf[BrokenAssimilationPath.DataTypeTip]
     def singleChild(implicit model: Model): JoinedAssimilationPath = JoinedAssimilationPath(assimilationPaths.map(_.singleChild))
     def parents: Set[AssimilationTip] = assimilationPaths.flatMap(_.parent).groupBy(_.tip).map(aps => JoinedAssimilationPath(aps._2)).toSet
     def +(aa: AbsoluteAssimilation)(implicit model: Model): AssimilationTip = JoinedAssimilationPath.AssimilationTip(assimilationPaths.map(_ + aa))
     def +(a: Assimilation)(implicit model: Model): AssimilationTip = this + AbsoluteAssimilation(tip, a)
-    def +(jap: DataTypeTip) = DataTypeTip(assimilationPaths ++ jap.assimilationPaths) 
+    def |(jap: DataTypeTip) = DataTypeTip(assimilationPaths ++ jap.assimilationPaths)
+    def splitByParent = assimilationPaths.groupBy(_.head).map(aps => JoinedAssimilationPath(aps._2)).toSet
   }
   case class AssimilationTip private[JoinedAssimilationPath](assimilationPaths: Set[AssimilationPath.AssimilationTip]) extends JoinedAssimilationPath {
     type A = AssimilationPath.AssimilationTip
     def tip = assimilationPaths.head.tip
     def tipEither = Right(tip)
-    override lazy val commonAssimilationPath = super.commonAssimilationPath.asInstanceOf[AssimilationPath.AssimilationTip]
+    override lazy val commonAssimilationPath = super.commonAssimilationPath.asInstanceOf[BrokenAssimilationPath.AssimilationTip]
     def withRange(multiplicityRange: AssimilationPath.MultiplicityRange) = copy(assimilationPaths.map(_ withRange multiplicityRange))
     def singleChild(implicit model: Model): JoinedAssimilationPath = JoinedAssimilationPath(assimilationPaths.map(_.singleChild))
     def parents: Set[DataTypeTip] = assimilationPaths.flatMap(_.parent).groupBy(_.tip).map(aps => JoinedAssimilationPath(aps._2)).toSet
     def +(dt: DataType) = JoinedAssimilationPath.DataTypeTip(assimilationPaths.map(_ + dt))
-    def +(jap: AssimilationTip) = AssimilationTip(assimilationPaths ++ jap.assimilationPaths)
+    def |(jap: AssimilationTip) = AssimilationTip(assimilationPaths ++ jap.assimilationPaths)
+    def splitByParent = assimilationPaths.groupBy(_.head).map(aps => JoinedAssimilationPath(aps._2)).toSet
   }
   def apply(assimilationPaths: Set[AssimilationPath.AssimilationTip]): AssimilationTip = AssimilationTip(assimilationPaths)
   def apply(assimilationPaths: Set[AssimilationPath.DataTypeTip]): DataTypeTip = DataTypeTip(assimilationPaths)
@@ -406,39 +531,24 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
     }
     initialOrientatingDataTypes ++ selectedLoopBreakingDataTypes
   }
-  def rootDataTypes = dataTypes.filter(dt => dt.selfAssimilations.isEmpty)
-  def effectiveStrength(absoluteAssimilation: AbsoluteAssimilation, dataTypeReference: DataTypeReferenceLike)(implicit model: Model): AssimilationStrength = {
-    val absoluteDtr = dataTypeReference.toAbsolute(absoluteAssimilation)
-    val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeReferences(dt)).find(_.filePath == dt.filePath).isDefined)
-    
-    def assimilationStrength(dataType: DataType): AssimilationStrength = ???
-      
-  // Assimilations of Self-Referencing DataTypes are either weak or reference (Depending on what self-reference is and if orientating data type)
-  // Unresolved assimilation loops containing no bounds should simply be registered: Any assimilation of a data type in the loop should be:
-  // - Weak if not specified
-  // - Never Strong
-  // - Can be set to reference
-  // Everything else is effectively defined
-    
-    
-    ???
+  lazy val traversals = orientatingDataTypes.flatMap(dt => AssimilationPath(dt).descendants).map(_.asInstanceOf[AssimilationPath.DataTypeTip])
+  lazy val crossingTraversals = {
+    for {
+      traversal <- traversals.toSeq
+      element <- traversal.toSeq
+    } yield element.tipEither -> traversal
+  }.groupBy(_._1).mapValues(_.map(_._2).toSet)
+  lazy val loops = crossingTraversals.flatMap { case (Left(dt), traversals) => Some(dt -> traversals); case _ => None }.map {
+    case (dt, traversals) => dt -> traversals.filter(_.loopsBack).map(lb => lb.indexesOf(_.tipEither == Left(dt)).toList match {
+      case first :: second :: _ => AssimilationPath(None, lb.toSeq.subList(first, second + 1))
+    })
   }
-  
-// TODO Glean any remaining value from this code and remove
-//  def descendentsThat(current: AssimilationPath[_], predicate: Either[DataType, AbsoluteAssimilation] => Boolean): Seq[AssimilationPath[_]] = {
-//    def recurse(nextAp: AssimilationPath[_], visited: Set[Either[DataType, AbsoluteAssimilation]]): Seq[AssimilationPath[_]] = {
-//      if (visited.contains(nextAp.tip)) Seq()
-//      else {
-//        if (predicate(nextAp.tip)) Seq(nextAp)
-//        else {
-//          val nextVisitedMap = visited + nextAp.tip
-//          nextAp.tip match {
-//            case Left(nextDt) => nextDt.absoluteAssimilations.foldLeft(Seq.empty[AssimilationPath[_]])((out, a) => out ++ recurse(nextAp + a.assimilation, nextVisitedMap))
-//            case Right(nextA) => nextA.dataTypes.foldLeft(Seq.empty[AssimilationPath[_]])((out, dt) => out ++ recurse(nextAp + dt, nextVisitedMap))
-//          }
-//        }
-//      }
-//    }
-//    recurse(current, Set())
-//  }
+  def crossingTraversals(dt: DataType): Set[AssimilationPath.DataTypeTip] = crossingTraversals(Left(dt))
+  def crossingTraversals(aa: AbsoluteAssimilation): Set[AssimilationPath.DataTypeTip] = crossingTraversals(Right(aa))
+  lazy val inboundTraversals = crossingTraversals.map {
+    case (tipEither, traversals) => tipEither -> JoinedAssimilationPath(traversals.flatMap(_.toSeq.filter(_.tipEither == tipEither)))
+  }
+  def inboundTraversals(dt: DataType): JoinedAssimilationPath.DataTypeTip = inboundTraversals(Left(dt)).asInstanceOf[JoinedAssimilationPath.DataTypeTip]
+  def inboundTraversals(aa: AbsoluteAssimilation): JoinedAssimilationPath.AssimilationTip = inboundTraversals(Right(aa)).asInstanceOf[JoinedAssimilationPath.AssimilationTip]
+  def rootDataTypes = dataTypes.filter(dt => dt.selfAssimilations.isEmpty)  
 }

@@ -26,8 +26,8 @@ object RelationalRenderer {
     case class NestedTable(assimilationPath: JoinedAssimilationPath, columnGroups: Seq[ColumnGroup]) extends ColumnGroup {
       type T = NestedTable
       def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap, columnGroups = columnGroups.map(cg => cg.withAssimilationPath(cg.assimilationPath.substituteParent(jap))))
-      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}NESTED: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" + (if (columnGroups.isEmpty) "" else s" {\n${columnGroups.map(_.technicalDescription(logicalTable, prefix + "  ")).mkString(s"\n")}\n$prefix}")
-      def doMerge(thisColumnGroup: NestedTable, thatColumnGroup: NestedTable): NestedTable = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath, columnGroups = (thisColumnGroup.columnGroups zip thatColumnGroup.columnGroups).map {
+      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}NESTED: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [${assimilationPath.toResolvedString}]" + (if (columnGroups.isEmpty) "" else s" {\n${columnGroups.map(_.technicalDescription(logicalTable, prefix + "  ")).mkString(s"\n")}\n$prefix}")
+      def doMerge(thisColumnGroup: NestedTable, thatColumnGroup: NestedTable): NestedTable = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath, columnGroups = (thisColumnGroup.columnGroups zip thatColumnGroup.columnGroups).map {
         case (thisCg, thatCg) => thisCg.mergeWith(thatCg)  
       })
       def size = columnGroups.foldLeft(0)((sum, cg) => sum + cg.size)
@@ -35,22 +35,22 @@ object RelationalRenderer {
     case class SimpleColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip, columnType: ColumnType) extends ColumnGroup {
       type T = SimpleColumn
       def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
-      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [$assimilationPath]"
-      def doMerge(thisColumnGroup: SimpleColumn, thatColumnGroup: SimpleColumn): SimpleColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
+      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [${assimilationPath.toResolvedString}]"
+      def doMerge(thisColumnGroup: SimpleColumn, thatColumnGroup: SimpleColumn): SimpleColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class EnumerationColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip) extends ColumnGroup {
       type T = EnumerationColumn
       def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
-      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}ENUMERATION: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" 
-      def doMerge(thisColumnGroup: EnumerationColumn, thatColumnGroup: EnumerationColumn): EnumerationColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
+      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"${prefix}ENUMERATION: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [${assimilationPath.toResolvedString}]" 
+      def doMerge(thisColumnGroup: EnumerationColumn, thatColumnGroup: EnumerationColumn): EnumerationColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class ParentReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ParentReference
       def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
-      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]" 
-      def doMerge(thisColumnGroup: ParentReference, thatColumnGroup: ParentReference): ParentReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
+      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath.toResolvedString}]" 
+      def doMerge(thisColumnGroup: ParentReference, thatColumnGroup: ParentReference): ParentReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
       def parentAssimilationPath = {
         val directParent = assimilationPath.parents.head
@@ -63,12 +63,12 @@ object RelationalRenderer {
     case class ChildReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ChildReference
       def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
-      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Child reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]"
-      def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath + thatColumnGroup.assimilationPath)
+      def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Child reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath.toResolvedString}]"
+      def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
       def childAssimilationPath(implicit model: Model) = assimilationPath match {
         case dtt: AssimilationPath.DataTypeTip if dtt.tip.isEffectivelyOrientating => JoinedAssimilationPath(dtt.tip)
-        case _ => throw new IllegalStateException(s"Currently can only deal with child references to orientating data types - not [$assimilationPath]")
+        case _ => throw new IllegalStateException(s"Currently can only deal with child references to orientating data types - not [${assimilationPath.toResolvedString}]")
       }
     }
     def apply(logicalTable: LogicalTable): ColumnGroup = {
@@ -80,7 +80,7 @@ object RelationalRenderer {
   case class LogicalTable(assimilationPath: JoinedAssimilationPath, columnGroups: Seq[ColumnGroup]) {
     import ColumnGroup._
     def parentReferenceOption = columnGroups.flatMap { case par: ColumnGroup.ParentReference => Some(par); case _ => None }.headOption
-    def technicalDescription(implicit model: Model) = s"TABLE: ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath}] {\n${columnGroups.map(_.technicalDescription(this, "  ")).mkString("\n")}\n}\n"
+    def technicalDescription(implicit model: Model) = s"TABLE: ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath.toResolvedString}] {\n${columnGroups.map(_.technicalDescription(this, "  ")).mkString("\n")}\n}\n"
     def allColumnGroups: Seq[ColumnGroup] = {
       def recurseColumnGroups(cg: ColumnGroup): Seq[ColumnGroup] = cg match {
         case r:Repeated => Seq(r) ++ recurseColumnGroups(r.columnGroup)
@@ -95,7 +95,7 @@ object RelationalRenderer {
       this.assimilationPath.tipEither == that.assimilationPath.tipEither &&
       parent.assimilationPaths.contains(this.parentReferenceOption.get.parentAssimilationPath) &&
       parent.assimilationPaths.contains(that.parentReferenceOption.get.parentAssimilationPath)
-    def mergeWith(parent: LogicalTable, that: LogicalTable): LogicalTable = if (canMergeWith(parent, that)) copy(assimilationPath = this.assimilationPath + that.assimilationPath, columnGroups = (this.columnGroups zip that.columnGroups).map {
+    def mergeWith(parent: LogicalTable, that: LogicalTable): LogicalTable = if (canMergeWith(parent, that)) copy(assimilationPath = this.assimilationPath | that.assimilationPath, columnGroups = (this.columnGroups zip that.columnGroups).map {
       case (thisCg, thatCg) => thisCg.mergeWith(thatCg)
     }) else throw new IllegalStateException(s"Cannot merge $this with $that.")
   }
@@ -323,7 +323,7 @@ object RelationalRenderer {
   }
 
   def relativeName(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath)(implicit model: Model): String = 
-    childJap.relativeTo(parentJap).japOption.map(_.commonAssimilationPath) match {
+    childJap.relativeTo(parentJap).map(_.commonAssimilationPath) match {
       case Some(ap) => AssimilationPathUtils.name(ap)
       case None => AssimilationPathUtils.name(childJap.commonAssimilationPath.withNoParent)
     }
