@@ -475,6 +475,10 @@ object JoinedAssimilationPath {
     def +(aa: AbsoluteAssimilation)(implicit model: Model): AssimilationTip = JoinedAssimilationPath.AssimilationTip(assimilationPaths.map(_ + aa))
     def +(a: Assimilation)(implicit model: Model): AssimilationTip = this + AbsoluteAssimilation(tip, a)
     def |(jap: DataTypeTip) = DataTypeTip(assimilationPaths ++ jap.assimilationPaths)
+    def effectiveAssimilationStrength(implicit model: Model) = assimilationPaths.flatMap(_.effectiveAssimilationStrength) match {
+      case x if x.size > 1 => throw new IllegalStateException(s"It shouldn't be possible to merge tips with different assimilation strengths: $toResolvedString {${x.mkString(",")}}")
+      case x => x.headOption
+    }
     def splitByParent = assimilationPaths.groupBy(_.head).map(aps => JoinedAssimilationPath(aps._2)).toSet
   }
   case class AssimilationTip private[JoinedAssimilationPath](assimilationPaths: Set[AssimilationPath.AssimilationTip]) extends JoinedAssimilationPath {
@@ -504,33 +508,7 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
   def maximumMultiplicityRange(assimilation: Assimilation): AssimilationPath.MultiplicityRange = AssimilationPath.MultiplicityRange(assimilation.minimumOccurences.getOrElse(defaultMinimumOccurences), assimilation.maximumOccurences.orElse(defaultMaximumOccurences))
   val dataTypes = definedDataTypes
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
-  lazy val orientatingDataTypes = {
-    val initialOrientatingDataTypes = {
-      val defined = dataTypes.filter(_.isOrientating)
-      val selfLooping = dataTypes.filter(dt => dt.assimilations.flatMap(_.absoluteDataTypeReferences(dt)).find(_.filePath == dt.filePath).isDefined)
-      rootDataTypes ++ defined ++ selfLooping
-    }
-    def findLoops(alreadyCrossedDataTypes: Set[DataType], dataType: DataType): Set[Set[DataType]] = {
-      if (initialOrientatingDataTypes.contains(dataType)) Set()
-      else if (alreadyCrossedDataTypes.contains(dataType)) Set(alreadyCrossedDataTypes)
-      else dataType.absoluteAssimilations.flatMap(_.dataTypes).foldLeft(Set.empty[Set[DataType]]) {
-        (loops, childDt) => loops ++ findLoops(alreadyCrossedDataTypes + dataType, childDt)
-      }
-    }
-    val loops = initialOrientatingDataTypes.foldLeft(Set.empty[Set[DataType]]) {
-      (childLoops, iodt) => childLoops ++ findLoops(Set(), iodt)
-    }
-    val selectedLoopBreakingDataTypes = loops.toSeq.sortBy(_.size).foldLeft(Set.empty[DataType]) {
-      (chosenOrientatingDataTypes, loop) =>
-        if (loop.foldLeft(false)((dataTypeAlreadySelected, loopDt) => dataTypeAlreadySelected || chosenOrientatingDataTypes.contains(loopDt))) chosenOrientatingDataTypes
-        else {
-          val mostAssimilatedDataTypes = loop.groupBy(_.selfAssimilations.size).toSeq.sortBy(-_._1).map(_._2).head
-          if (mostAssimilatedDataTypes.size == 1) chosenOrientatingDataTypes + mostAssimilatedDataTypes.head
-          else throw new IllegalStateException(s"Cannot orientate model - please make one of the following data types orientating: ${loop.map(_.filePath).mkString(", ")}")
-        }
-    }
-    initialOrientatingDataTypes ++ selectedLoopBreakingDataTypes
-  }
+  lazy val orientatingDataTypes = dataTypes.filter(_.isOrientating)
   lazy val traversals = orientatingDataTypes.flatMap(dt => AssimilationPath(dt).descendants).map(_.asInstanceOf[AssimilationPath.DataTypeTip])
   lazy val crossingTraversals = {
     for {

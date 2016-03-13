@@ -32,9 +32,9 @@ object RelationalRenderer {
       })
       def size = columnGroups.foldLeft(0)((sum, cg) => sum + cg.size)
     }
-    case class SimpleColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip, columnType: ColumnType) extends ColumnGroup {
+    case class SimpleColumn(assimilationPath: JoinedAssimilationPath, columnType: ColumnType) extends ColumnGroup {
       type T = SimpleColumn
-      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
+      def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap)
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model) : String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [${assimilationPath.toResolvedString}]"
       def doMerge(thisColumnGroup: SimpleColumn, thatColumnGroup: SimpleColumn): SimpleColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
@@ -48,7 +48,7 @@ object RelationalRenderer {
     }
     case class ParentReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ParentReference
-      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
+      def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap)
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath.toResolvedString}]" 
       def doMerge(thisColumnGroup: ParentReference, thatColumnGroup: ParentReference): ParentReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
@@ -62,7 +62,7 @@ object RelationalRenderer {
     }
     case class ChildReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ChildReference
-      def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
+      def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap)
       def technicalDescription(logicalTable: LogicalTable, prefix: String)(implicit model: Model): String = s"${prefix}Child reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [${assimilationPath.toResolvedString}]"
       def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
@@ -249,14 +249,19 @@ object RelationalRenderer {
 
   def columnGroupsAndChildTables(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): (Seq[ColumnGroup], Set[LogicalTableSet]) = {
     val tableSet = toTableFromAssimilation(assimilationPath)
-    assimilationPath.tip.assimilation.maximumOccurences match {
-      case Some(maxOccurs) =>
-        if (maxOccurs > 1 && maxOccurs <= config.maximumOccurencesTableLimit && tableSet.childLogicalTableSets.isEmpty)
-          (Seq(ColumnGroup.Repeated(ColumnGroup(tableSet.table), maxOccurs)), Set())
-        else if (maxOccurs == 1) (Seq(ColumnGroup(tableSet.table)), tableSet.childLogicalTableSets)
-        else (Seq(), Set(tableSet))
-      case None =>
+    tableSet.table.assimilationPath match {
+      case dtt: JoinedAssimilationPath.DataTypeTip if dtt.effectiveAssimilationStrength == Some(AssimilationStrength.Weak) =>
         (Seq(), Set(tableSet))
+      case _ =>
+        assimilationPath.tip.assimilation.maximumOccurences match {
+          case Some(maxOccurs) =>
+            if (maxOccurs > 1 && maxOccurs <= config.maximumOccurencesTableLimit && tableSet.childLogicalTableSets.isEmpty)
+              (Seq(ColumnGroup.Repeated(ColumnGroup(tableSet.table), maxOccurs)), Set())
+            else if (maxOccurs == 1) (Seq(ColumnGroup(tableSet.table)), tableSet.childLogicalTableSets)
+            else (Seq(), Set(tableSet))
+          case None =>
+            (Seq(), Set(tableSet))
+        }
     }
   }
 
@@ -273,21 +278,16 @@ object RelationalRenderer {
     recurse(Set(), childLogicalTableSets)
   }
   
-  def toSimpleColumnGroup(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): ColumnGroup.SimpleColumn =
-    ColumnGroup.SimpleColumn(assimilationPath, config.mappedColumnType(assimilationPath.tip.dataTypes.head).get)
+  def toSimpleColumnGroup(assimilationPath: JoinedAssimilationPath.DataTypeTip)(implicit config: Config, model: Model): ColumnGroup.SimpleColumn =
+    ColumnGroup.SimpleColumn(assimilationPath, config.mappedColumnType(assimilationPath.tip).get)
 
   def toTableFromAssimilation(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config, model: Model): LogicalTableSet = {
-    if (assimilationPath.tip.dataTypeReferences.size == 1 && config.mappedColumnType(assimilationPath.tip.dataTypes.head).isDefined) {
-      LogicalTableSet(LogicalTable(
-          assimilationPath = assimilationPath,
-          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toSimpleColumnGroup(assimilationPath)))
-        , Set())
-    }
-    else if (assimilationPath.tip.dataTypeReferences.size == 1) toTableFromDataTypeOrReference(assimilationPath + assimilationPath.tip.dataTypes.head)
+    if (assimilationPath.tip.dataTypeReferences.size == 1) toTableFromDataTypeOrReference(assimilationPath + assimilationPath.tip.dataTypes.head)
     else if (assimilationPath.tip.dataTypeReferences.size > 1) {
       val (columns, childTables) = assimilationPath.tip.dataTypes.map(dt => toTableFromDataTypeOrReference(assimilationPath + dt)).foldLeft((Seq.empty[ColumnGroup], Set.empty[LogicalTableSet])) {
         case ((fcs, fts), ts) =>
-          if (!config.maximumSubTypeColumnsBeforeSplittingOut.isDefined || ts.table.columnGroups.filterNot(_.isInstanceOf[ColumnGroup.ParentReference]).size <= config.maximumSubTypeColumnsBeforeSplittingOut.get) {
+          if (ts.table.assimilationPath.asInstanceOf[JoinedAssimilationPath.DataTypeTip].effectiveAssimilationStrength == Some(AssimilationStrength.Weak)) (fcs, fts + ts)
+          else if (!config.maximumSubTypeColumnsBeforeSplittingOut.isDefined || ts.table.columnGroups.filterNot(_.isInstanceOf[ColumnGroup.ParentReference]).size <= config.maximumSubTypeColumnsBeforeSplittingOut.get) {
             (fcs :+ ColumnGroup(ts.table), fts ++ ts.childLogicalTableSets)
           } else (fcs, fts + ts)
       }
@@ -300,15 +300,19 @@ object RelationalRenderer {
   }
 
   def toTableFromDataTypeOrReference(assimilationPath: JoinedAssimilationPath.DataTypeTip)(implicit config: Config, model: Model): LogicalTableSet = {
-    if (assimilationPath.tip.isEffectivelyOrientating) {
+    if (assimilationPath.effectiveAssimilationStrength == Some(AssimilationStrength.Reference)) {
       LogicalTableSet(
           LogicalTable(
             assimilationPath = assimilationPath,
             columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), ColumnGroup.ChildReference(assimilationPath))
-          ),
-          Set.empty[LogicalTableSet])
-    } else
-      toTableFromDataType(assimilationPath)
+          ), Set())
+    } else if (config.mappedColumnType(assimilationPath.tip).isDefined) {
+      LogicalTableSet(
+          LogicalTable(
+            assimilationPath = assimilationPath,
+            columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toSimpleColumnGroup(assimilationPath))
+          ), Set())
+    } else toTableFromDataType(assimilationPath)
   }
 
   def toTableFromDataType(assimilationPath: JoinedAssimilationPath.DataTypeTip)(implicit config: Config, model: Model): LogicalTableSet = {
@@ -325,7 +329,12 @@ object RelationalRenderer {
   def relativeName(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath)(implicit model: Model): String = 
     childJap.relativeTo(parentJap).map(_.commonAssimilationPath) match {
       case Some(ap) => AssimilationPathUtils.name(ap)
-      case None => AssimilationPathUtils.name(childJap.commonAssimilationPath.withNoParent)
+      case None => 
+        AssimilationPathUtils.name {
+            val commonPathSeq = childJap.commonAssimilationPath.toSeq
+            if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
+            else childJap.commonAssimilationPath.withNoParent
+        }
     }
   
 }

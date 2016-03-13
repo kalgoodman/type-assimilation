@@ -17,7 +17,7 @@ object DataTypePersistence {
     <type>
       <name>{ dataType.name }</name>
       { if (dataType.description.isDefined) <description>{ dataType.description.get }</description> }
-      { if (dataType.isOrientating) <orientating-strength>true</orientating-strength> }
+      { if (dataType.isOrientating) <orientating>true</orientating> }
       {
         if (!dataType.assimilations.isEmpty) {
           <assimilations>
