@@ -22,73 +22,65 @@ case class RelationalModel(tables: Set[Table]) {
 
 object RelationalModel {
   def apply(logicalRelationalModel: LogicalRelationalModel): RelationalModel = RelationalModel(logicalRelationalModel.tables.map(t => table(t, logicalRelationalModel)))
-  def primaryKeys(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = { 
-    implicit val model = logicalRelationalModel.model
+  def primaryKeys(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = {
     implicit val config = logicalRelationalModel.config
     config.primaryKeyPolicy.modifyPrimaryKeys(
-       logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
-       logicalRelationalModel.config.namingPolicy.tableName(logicalTable),
-       logicalTable,
-       logicalRelationalModel)
+      logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
+      logicalRelationalModel.config.namingPolicy.tableName(logicalTable),
+      logicalTable,
+      logicalRelationalModel)
   }
   case class TableDescriptor(name: String, primaryKeys: Seq[Column])
   def tableDescriptor(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = {
-    implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
     TableDescriptor(logicalRelationalModel.config.namingPolicy.tableName(logicalTable), primaryKeys(logicalTable, logicalRelationalModel))
   }
   def table(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Table = {
-    implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
     val descriptor = tableDescriptor(logicalTable, logicalRelationalModel)
     Table(
-       name = descriptor.name,
-       description = config.namingPolicy.tableDescription(logicalTable),
-       columns = descriptor.primaryKeys ++
-         logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)),
-       assimilationPath = logicalTable.assimilationPath
-    )
+      name = descriptor.name,
+      description = config.namingPolicy.tableDescription(logicalTable),
+      columns = descriptor.primaryKeys ++
+        logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)),
+      assimilationPath = logicalTable.assimilationPath)
   }
   def columns(columnGroup: ColumnGroup, parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
-    implicit val model = logicalRelationalModel.model
     implicit val config = logicalRelationalModel.config
     def nullable = columnGroup.assimilationPath != parentLogicalTable.assimilationPath && (columnGroup.assimilationPath.relativeTo(parentLogicalTable.assimilationPath) match {
       case None => true
-      case Some(jap) => jap.commonAssimilationPath.tipEither match {
-        case Right(aa) => aa.assimilation.minimumOccurences.getOrElse(0) < 1
-      }
+      case Some(jap) =>
+        jap.commonAssimilationPath.toSeq.flatMap { case at:BrokenAssimilationPath.AssimilationTip => Some(at.multiplicityRangeLimits.inclusiveLowerBound); case _ => None}.min < 1
     })
     import ColumnGroup._
     columnGroup match {
       case Repeated(columnGroup, repeats) => (1 to repeats).map(AssimilationPath.MultiplicityRange.forOnly).flatMap(newRange => columns(columnGroup.withAssimilationPath(columnGroup.assimilationPath match {
-        case at:JoinedAssimilationPath.AssimilationTip => at.withRange(newRange)
-        case dtt:JoinedAssimilationPath.DataTypeTip if dtt.parents.size == 1 => dtt.parents.head.withRange(newRange) + dtt.tip
+        case at: JoinedAssimilationPath.AssimilationTip => at.withRange(newRange)
+        case dtt: JoinedAssimilationPath.DataTypeTip if dtt.parents.size == 1 => dtt.parents.head.withRange(newRange) + dtt.tip
         case ap => throw new UnsupportedOperationException(s"Cannot repeat ColumnGroup with AssimilationPath: $ap")
       }), parentLogicalTable, logicalRelationalModel))
       case sc: SimpleColumn => Seq(Column(
-          name = config.namingPolicy.columnName(parentLogicalTable, sc.assimilationPath),
-          description = config.namingPolicy.columnDescription(parentLogicalTable, sc.assimilationPath),
-          `type` = sc.columnType, 
-          isGenerated = false,
-          isNullable = nullable,
-          assimilationPath = sc.assimilationPath
-          ))
-      case e: EnumerationColumn => 
+        name = config.namingPolicy.columnName(parentLogicalTable, sc.assimilationPath),
+        description = config.namingPolicy.columnDescription(parentLogicalTable, sc.assimilationPath),
+        `type` = sc.columnType,
+        isGenerated = false,
+        isNullable = nullable,
+        assimilationPath = sc.assimilationPath))
+      case e: EnumerationColumn =>
         val enumeration = {
           Enumeration(
-              name = config.namingPolicy.enumerationName(e.assimilationPath),
-              values = e.assimilationPath.tip.dataTypes.map {
-                dt =>
-                  val valueAssimilationPath = e.assimilationPath + dt
-                  EnumerationValue(config.namingPolicy.enumerationValueName(valueAssimilationPath), config.namingPolicy.enumerationValueDescription(valueAssimilationPath), valueAssimilationPath)
-              },
-              assimilationPath = e.assimilationPath)
+            name = config.namingPolicy.enumerationName(e.assimilationPath),
+            values = e.assimilationPath.tip.dataTypes.map {
+              dt =>
+                val valueAssimilationPath = e.assimilationPath + dt
+                EnumerationValue(config.namingPolicy.enumerationValueName(valueAssimilationPath), config.namingPolicy.enumerationValueDescription(valueAssimilationPath), valueAssimilationPath)
+            },
+            assimilationPath = e.assimilationPath)
         }
         columns(SimpleColumn(e.assimilationPath, ColumnType(config.enumerationColumnType.replaceAllLiterally("[SIZE]", enumeration.maximumValueSize.toString))), parentLogicalTable, logicalRelationalModel).map(_.copy(
-          enumeration = Some(enumeration)
-        ))
-      case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, parentLogicalTable, logicalRelationalModel)) 
-      case cr: ChildReference => 
+          enumeration = Some(enumeration)))
+      case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, parentLogicalTable, logicalRelationalModel))
+      case cr: ChildReference =>
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(cr), logicalRelationalModel)
         referencedTable.primaryKeys.map(pk => Column(
           name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk),
@@ -97,8 +89,7 @@ object RelationalModel {
           isGenerated = pk.isGenerated,
           isNullable = nullable,
           foreignKeyReference = Some(ColumnReference(referencedTable.name, pk.name)),
-          assimilationPath = cr.assimilationPath
-        ))
+          assimilationPath = cr.assimilationPath))
       case pr: ParentReference =>
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(pr), logicalRelationalModel)
         referencedTable.primaryKeys.map(pk => Column(
@@ -108,11 +99,10 @@ object RelationalModel {
           isGenerated = pk.isGenerated,
           isNullable = nullable,
           foreignKeyReference = Some(ColumnReference(referencedTable.name, pk.name)),
-          assimilationPath = pr.assimilationPath
-        ))
+          assimilationPath = pr.assimilationPath))
     }
   }
-    
+
 }
 
 case class ColumnType(typeDefinition: String)

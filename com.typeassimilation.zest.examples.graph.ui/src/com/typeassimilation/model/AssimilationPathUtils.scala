@@ -2,7 +2,7 @@ package com.typeassimilation.model
 
 object AssimilationPathUtils {
   val DefaultAssimilationName = "Type"
-  def name(brokenAssimilationPath: BrokenAssimilationPath)(implicit model: Model): String = {
+  def name(brokenAssimilationPath: BrokenAssimilationPath): String = {
     import BrokenAssimilationPath._
     def multiplicitySuffix(bap: BrokenAssimilationPath) = bap match {
       case at:AssimilationTip if !at.coversRange => " " + at.multiplicityRangeLimits.inclusiveLowerBound.toString + 
