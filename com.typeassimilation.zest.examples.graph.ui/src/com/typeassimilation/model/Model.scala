@@ -17,9 +17,20 @@ import FilePath.Implicits._
 case class DataType(val filePath: FilePath.Absolute, name: String, description: Option[String], assimilations: Seq[Assimilation], isOrientating: Boolean, modelOption: Option[Model] = None) {
   def model = modelOption.getOrElse(throw new IllegalStateException(s"$this must be assigned a model prior to any operations (by adding it to one)."))
   def absoluteAssimilations = assimilations.map(a => AbsoluteAssimilation(this, a))
-  def selfAssimilations = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeReferences.map(_.filePath).contains(filePath))
-  def loops = model.loops(this)
+  lazy val selfAssimilations = model.dataTypes.flatMap(_.absoluteAssimilations).filter(_.dataTypeReferences.map(_.filePath).contains(filePath))
+  lazy val loops = model.loops(this)
+  def referenceAssimilationPath = if (isEffectivelyOrientating) AssimilationPath(this)
+  else {
+    val weakReferences = model.inboundTraversals(this).assimilationPaths.filter(_.effectiveAssimilationStrength == Some(AssimilationStrength.Weak))
+    weakReferences.size match {
+      case 0 => throw new IllegalStateException(s"Could not find any AssimilationPath for referenced DataType ($name) to link to.")
+      case 1 => weakReferences.head
+      case x if x > 1 => throw new IllegalStateException(s"Found multiple AssimilationPaths for referenced DataType ($name) to link to: ${weakReferences.mkString(", ")}")
+    }
+  }
   def identifyingAssimilations = assimilations.filter(_.isIdentifying)
+  lazy val isEffectivelyOrientating = isOrientating || model.inboundTraversals(this).assimilationPaths.foldLeft(true)((allReferences, ap) => allReferences && ap.effectiveAssimilationStrength == Some(AssimilationStrength.Reference))
+  lazy val isReachable = isOrientating || model.reachableDataTypes.contains(this)
 }
 
 sealed trait AssimilationStrength {
@@ -159,7 +170,7 @@ sealed trait AssimilationPath {
   def children: Iterable[AssimilationPath]
   def singleChild: AssimilationPath
   def isAbsolute = head.tipEither match {
-    case Left(dt) => dt.isOrientating
+    case Left(dt) => dt.isEffectivelyOrientating
     case _ => false
   }
   /**
@@ -293,11 +304,11 @@ object AssimilationPath {
     def hasSingleChild = tip.assimilations.size == 1
     def tipDisplayName: String = parent.flatMap(_.tip.assimilation.name).getOrElse(tip.name)
     def tipDisplayDescription: Option[String] = tip.description
-    def isReferenceToOrientatingDataType = tip.isOrientating && length > 1
+    def isReferenceToOrientatingDataType = tip.isEffectivelyOrientating && length > 1
     override def toString = parent.map(_.toString + (parentDataTypeReference.get.strength match {
       case None => s" =(${effectiveAssimilationStrength.get})=> "
       case Some(strength) => s" =[$strength]=> "
-    })).getOrElse("") + s"${tip.name}${if (tip.isOrientating) "*" else ""} (${tip.filePath})"
+    })).getOrElse("") + s"${tip.name}${if (tip.isOrientating) "*" else if (tip.isEffectivelyOrientating) "*'" else ""} (${tip.filePath})"
   }
   
   case class MultiplicityRange(inclusiveLowerBound: Int, inclusiveUpperBound: Option[Int]) {
@@ -510,6 +521,7 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
   val dataTypes = definedDataTypes.map(_.copy(modelOption = Some(this)))
   def dataTypeOption(filePath: FilePath.Absolute) = dataTypes.find(_.filePath == filePath)
   lazy val orientatingDataTypes = dataTypes.filter(_.isOrientating)
+  lazy val effectivelyOrientatingDataTypes = dataTypes.filter(dt => dt.isReachable && dt.isEffectivelyOrientating)
   lazy val traversals = orientatingDataTypes.flatMap(dt => AssimilationPath(dt).descendants).map(_.asInstanceOf[AssimilationPath.DataTypeTip])
   lazy val crossingTraversals = {
     for {
@@ -517,12 +529,13 @@ case class Model(definedDataTypes: Set[DataType], defaultMinimumOccurences: Int 
       element <- traversal.toSeq
     } yield element.tipEither -> traversal
   }.groupBy(_._1).mapValues(_.map(_._2).toSet)
+  lazy val reachableDataTypes = dataTypes.filter(dt => crossingTraversals.contains(Left(dt)))
   lazy val loops = crossingTraversals.flatMap { case (Left(dt), traversals) => Some(dt -> traversals); case _ => None }.map {
     case (dt, traversals) => dt -> traversals.filter(_.loopsBack).map(lb => lb.indexesOf(_.tipEither == Left(dt)).toList match {
       case first :: second :: _ => AssimilationPath(None, lb.toSeq.subList(first, second + 1))
     })
   }
-  def crossingTraversals(dt: DataType): Set[AssimilationPath.DataTypeTip] = crossingTraversals(Left(dt))
+  def crossingTraversals(dt: DataType): Set[AssimilationPath.DataTypeTip] = if (dt.isReachable) crossingTraversals(Left(dt)) else throw new IllegalArgumentException(s"The data type is not reachable: $dt")
   def crossingTraversals(aa: AbsoluteAssimilation): Set[AssimilationPath.DataTypeTip] = crossingTraversals(Right(aa))
   lazy val inboundTraversals = crossingTraversals.map {
     case (tipEither, traversals) => tipEither -> JoinedAssimilationPath(traversals.flatMap(_.toSeq.filter(_.tipEither == tipEither)))

@@ -68,8 +68,8 @@ object RelationalRenderer {
       def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
       def childAssimilationPath = assimilationPath match {
-        case dtt: JoinedAssimilationPath.DataTypeTip if dtt.tip.isOrientating => JoinedAssimilationPath(dtt.tip)
-        case _ => throw new IllegalStateException(s"Currently can only deal with child references to orientating data types - not [$assimilationPath]")
+        case dtt: JoinedAssimilationPath.DataTypeTip => JoinedAssimilationPath(Set(dtt.tip.referenceAssimilationPath))
+        case _ => throw new IllegalStateException(s"Currently can only deal with child references to data types - not [$assimilationPath]")
       }
     }
     def apply(logicalTable: LogicalTable): ColumnGroup = {
@@ -91,7 +91,7 @@ object RelationalRenderer {
       columnGroups.flatMap(recurseColumnGroups(_))
     }
     def nestedAssimilationPaths = allColumnGroups.flatMap { case nt: NestedTable => Some(nt); case _ => None }.map(_.assimilationPath).toSet
-    def assimilationPaths = nestedAssimilationPaths ++ AssimilationPathUtils.merge(nestedAssimilationPaths) + assimilationPath 
+    def assimilationPaths = nestedAssimilationPaths ++ AssimilationPathUtils.merge(nestedAssimilationPaths) + assimilationPath
     def canMergeWith(parent: LogicalTable, that: LogicalTable): Boolean =
       this.assimilationPath.tipEither == that.assimilationPath.tipEither &&
       parent.assimilationPaths.contains(this.parentReferenceOption.get.parentAssimilationPath) &&
@@ -105,7 +105,7 @@ object RelationalRenderer {
     private def logicalTable(assimilationPath: JoinedAssimilationPath) = assimilationPathToTableMap.getOrElseUpdate(assimilationPath, {
       assimilationPathToTableMap.keysIterator.find(_.covers(assimilationPath)) match {
         case Some(ap) => assimilationPathToTableMap(ap)
-        case None => throw new IllegalArgumentException(s"There is are LogicalTables that account for AssimilationPath $assimilationPath")
+        case None => throw new IllegalArgumentException(s"There are no LogicalTables that account for AssimilationPath $assimilationPath")
       }
     })
     def follow(parentReference: ColumnGroup.ParentReference) = logicalTable(parentReference.parentAssimilationPath)
@@ -246,7 +246,7 @@ object RelationalRenderer {
   }
   
   def render(implicit model: Model, config: Config = Config()) = 
-      LogicalRelationalModel(model.orientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), config)
+      LogicalRelationalModel(model.effectivelyOrientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), config)
 
   def columnGroupsAndChildTables(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config): (Seq[ColumnGroup], Set[LogicalTableSet]) = {
     val tableSet = toTableFromAssimilation(assimilationPath)

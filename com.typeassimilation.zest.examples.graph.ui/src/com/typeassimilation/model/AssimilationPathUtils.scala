@@ -17,7 +17,7 @@ object AssimilationPathUtils {
         if (atParent.tip.assimilation.dataTypeReferences.size > 1) Some(dtt.tip.name + multiplicitySuffix(atParent))
         else None
       }
-      case Some(_) if !dtt.contiguousParent => None
+      case Some(atParent: AssimilationTip) if !dtt.contiguousParent => None
       case _ => Some(dtt.tip.name)
     }
     def atNameElement(at: AssimilationTip): Option[String] = at.tip.assimilation.name.map(_ + multiplicitySuffix(at))
