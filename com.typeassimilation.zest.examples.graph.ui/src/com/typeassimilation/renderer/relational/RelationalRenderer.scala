@@ -103,7 +103,8 @@ object RelationalRenderer {
   case class LogicalRelationalModel(tables: Set[LogicalTable], config: Config) {
     private val assimilationPathToTableMap: mutable.Map[JoinedAssimilationPath, LogicalTable] = mutable.Map(tables.flatMap(lt => lt.assimilationPaths.map(ap => ap -> lt)).toArray:_*)
     private def logicalTable(assimilationPath: JoinedAssimilationPath) = assimilationPathToTableMap.getOrElseUpdate(assimilationPath, {
-      assimilationPathToTableMap.keysIterator.find(_.covers(assimilationPath)) match {
+      val apToSeek = assimilationPath.relativeToLastEffectiveOrientatingDataType
+      assimilationPathToTableMap.keysIterator.find(_.covers(apToSeek)) match {
         case Some(ap) => assimilationPathToTableMap(ap)
         case None => throw new IllegalArgumentException(s"There are no LogicalTables that account for AssimilationPath $assimilationPath")
       }
@@ -196,11 +197,7 @@ object RelationalRenderer {
       def tableDescription(logicalTable: LogicalTable)(implicit config: Config): Option[String] = logicalTable.assimilationPath.tipDescription
       def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = underscoreDelimitedName(relativeName(parentLogicalTable.assimilationPath, assimilationPath))
       def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription //TODO This should be a more complex version of the naming function
-      def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): String = {
-        val namesInFirstOccurenceOrder = mutable.LinkedHashSet(columnName(parentLogicalTable, assimilationPath).split('_'):_*)
-        namesInFirstOccurenceOrder ++= referencePrimaryKeyColumn.name.split('_')
-        namesInFirstOccurenceOrder.mkString("_")
-      }
+      def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): String = columnName(parentLogicalTable, assimilationPath) + "_" + referencePrimaryKeyColumn.name
       def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = assimilationPath.tipDescription 
       def parentForeignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): String = referencePrimaryKeyColumn.name
       def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = referencePrimaryKeyColumn.description.map("Reference to " + _)
