@@ -445,6 +445,7 @@ sealed trait JoinedAssimilationPath {
     case Right(aa) => aa.assimilation.description
   }
   def parents: Iterable[JoinedAssimilationPath]
+  def heads = assimilationPaths.map(_.head)
   def singleChild: JoinedAssimilationPath
   def hasSingleChild: Boolean = assimilationPaths.head.hasSingleChild
   def parentToChildMap[P <: JoinedAssimilationPath](parentJap: P) = parentJap.assimilationPaths.map(pap => pap -> assimilationPaths.filter(_.isChildOf(pap)).toSet).toMap

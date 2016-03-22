@@ -2,11 +2,9 @@ package com.typeassimilation.renderer.relational
 
 import com.typeassimilation.model._
 import com.typeassimilation.renderer.relational.RelationalRenderer.LogicalRelationalModel
-import com.typeassimilation.renderer.relational.RelationalRenderer.LogicalRelationalModel
 import com.typeassimilation.renderer.relational.RelationalRenderer.LogicalTable
 import com.typeassimilation.renderer.relational.RelationalRenderer.ColumnGroup
 import com.typeassimilation.renderer.relational.RelationalRenderer.Config
-import com.typeassimilation.renderer.relational.RelationalRenderer.LogicalRelationalModel
 
 case class RelationalModel(tables: Set[Table]) {
   private val nameToTableMap = tables.map(t => t.name -> t).toMap
@@ -31,9 +29,22 @@ object RelationalModel {
       logicalRelationalModel)
   }
   case class TableDescriptor(name: String, primaryKeys: Seq[Column])
-  def tableDescriptor(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = {
-    implicit val config = logicalRelationalModel.config
-    TableDescriptor(logicalRelationalModel.config.namingPolicy.tableName(logicalTable), primaryKeys(logicalTable, logicalRelationalModel))
+  def tableDescriptor(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): TableDescriptor = TableDescriptor(tableName(logicalTable, logicalRelationalModel), primaryKeys(logicalTable, logicalRelationalModel))
+  def tableName(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = logicalRelationalModel.config.namingPolicy.tableName(logicalTable)(logicalRelationalModel.config)
+  def logicalTable(table: String, logicalRelationalModel: LogicalRelationalModel): Option[LogicalTable] = logicalRelationalModel.tables.find(t => tableName(t, logicalRelationalModel) == table)
+  def sourceLogicalTables(columnReference: ColumnReference, logicalRelationalModel: LogicalRelationalModel): Seq[LogicalTable] = {
+    def recurse(cr: ColumnReference): Seq[LogicalTable] = 
+      logicalTable(cr.tableName, logicalRelationalModel) match {
+        case None => Seq()
+        case Some(lt) => tableDescriptor(lt, logicalRelationalModel).primaryKeys.find(_.name == cr.columnName) match {
+          case None => Seq()
+          case Some(pk) => pk.foreignKeyReference match {
+            case None => Seq(lt)
+            case Some(nextCr) => lt +: recurse(nextCr)
+          }
+        }
+      }
+    recurse(columnReference)
   }
   def table(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Table = {
     implicit val config = logicalRelationalModel.config
@@ -82,14 +93,20 @@ object RelationalModel {
       case nt: NestedTable => nt.columnGroups.flatMap(cg => columns(cg, parentLogicalTable, logicalRelationalModel))
       case cr: ChildReference =>
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(cr), logicalRelationalModel)
-        referencedTable.primaryKeys.map(pk => Column(
-          name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk),
-          description = config.namingPolicy.foreignKeyColumnDescription(parentLogicalTable, cr.assimilationPath, pk),
-          `type` = pk.`type`,
-          isGenerated = pk.isGenerated,
-          isNullable = nullable,
-          foreignKeyReference = Some(ColumnReference(referencedTable.name, pk.name)),
-          assimilationPath = cr.assimilationPath))
+        val parentTables: Set[LogicalTable] = if (cr.isReferenceToWeakAssimilationWithCommonParent) {
+          val parentTd = tableDescriptor(parentLogicalTable, logicalRelationalModel)
+          parentTd.primaryKeys.flatMap(pk => sourceLogicalTables(pk.toForeignKeyReference(parentTd.name), logicalRelationalModel)).toSet + parentLogicalTable
+        } else Set()
+        referencedTable.primaryKeys.filterNot(pk => cr.isReferenceToWeakAssimilationWithCommonParent &&
+            !((parentTables & sourceLogicalTables(pk.toForeignKeyReference(referencedTable.name), logicalRelationalModel).toSet).isEmpty)
+          ).map(pk => Column(
+            name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk),
+            description = config.namingPolicy.foreignKeyColumnDescription(parentLogicalTable, cr.assimilationPath, pk),
+            `type` = pk.`type`,
+            isGenerated = pk.isGenerated,
+            isNullable = nullable,
+            foreignKeyReference = Some(pk.toForeignKeyReference(referencedTable.name)),
+            assimilationPath = cr.assimilationPath))
       case pr: ParentReference =>
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(pr), logicalRelationalModel)
         referencedTable.primaryKeys.map(pk => Column(
@@ -98,7 +115,7 @@ object RelationalModel {
           `type` = pk.`type`,
           isGenerated = pk.isGenerated,
           isNullable = nullable,
-          foreignKeyReference = Some(ColumnReference(referencedTable.name, pk.name)),
+          foreignKeyReference = Some(pk.toForeignKeyReference(referencedTable.name)),
           assimilationPath = pr.assimilationPath))
     }
   }

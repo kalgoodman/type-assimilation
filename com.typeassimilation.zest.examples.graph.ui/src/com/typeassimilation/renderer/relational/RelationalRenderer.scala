@@ -67,10 +67,13 @@ object RelationalRenderer {
       def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"${prefix}Child reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]"
       def doMerge(thisColumnGroup: ChildReference, thatColumnGroup: ChildReference): ChildReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
-      def childAssimilationPath = assimilationPath match {
+      lazy val childAssimilationPath = assimilationPath match {
         case dtt: JoinedAssimilationPath.DataTypeTip => JoinedAssimilationPath(Set(dtt.tip.referenceAssimilationPath))
         case _ => throw new IllegalStateException(s"Currently can only deal with child references to data types - not [$assimilationPath]")
       }
+      lazy val isReferenceToWeakAssimilationWithCommonParent =
+        childAssimilationPath.effectiveAssimilationStrength == Some(AssimilationStrength.Weak) &&
+        (assimilationPath.relativeToLastEffectiveOrientatingDataType.heads subsetOf childAssimilationPath.relativeToLastEffectiveOrientatingDataType.heads)
     }
     def apply(logicalTable: LogicalTable): ColumnGroup = {
       val columnGroups = logicalTable.columnGroups.filterNot(_.isInstanceOf[ParentReference])
@@ -227,14 +230,15 @@ object RelationalRenderer {
       def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = if (currentPrimaryKeys.isEmpty) Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)) else currentPrimaryKeys
     }
     case class NaturalKey(suffix: String = "_ID") extends PrimaryKeyPolicy {
-      private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.find(_.assimilationPath.tipEither match {
-        case Right(aa) => aa.assimilation.isIdentifying
-        case _ => false
-      }).isDefined
-      def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Boolean = (!hasIdentifyingColumnGroup(logicalTable) && columnGroup.isInstanceOf[ColumnGroup.ParentReference]) || (columnGroup.assimilationPath.tipEither match {
-        case Left(dt) => false
-        case Right(aa) => aa.assimilation.isIdentifying
-      })
+      private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.exists(cg => isIdentifyingColumnGroup(cg, logicalTable)) 
+      private def isIdentifyingColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable) = columnGroup.assimilationPath.relativeTo(logicalTable.assimilationPath) match {
+        case Some(relativeAp) => relativeAp.heads.exists(_ match {
+          case at:AssimilationPath.AssimilationTip => at.tip.assimilation.isIdentifying
+          case _ => false
+        })
+        case None => false
+      }
+      def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Boolean = (!hasIdentifyingColumnGroup(logicalTable) && columnGroup.isInstanceOf[ColumnGroup.ParentReference]) || isIdentifyingColumnGroup(columnGroup, logicalTable)
       def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = currentPrimaryKeys ++ (
           if (hasIdentifyingColumnGroup(logicalTable)) Seq()
           else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)}."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true))
