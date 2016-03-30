@@ -2,6 +2,7 @@ package com.typeassimilation.model
 
 object AssimilationPathUtils {
   val DefaultAssimilationName = "Type"
+  val DefaultAssimilationDescriptionPrefix = "The type of"
   def name(brokenAssimilationPath: BrokenAssimilationPath): String = {
     import BrokenAssimilationPath._
     def multiplicitySuffix(bap: BrokenAssimilationPath) = bap match {
@@ -30,6 +31,47 @@ object AssimilationPathUtils {
       case bap => bap.toSeq.flatMap(nameElement).mkString(" ")
     }
   }
+  
+  def description(brokenAssimilationPath: BrokenAssimilationPath): String = {
+    import BrokenAssimilationPath._
+    import WordUtils._
+    def multiplicityPrefix(bap: BrokenAssimilationPath) = bap match {
+      case at:AssimilationTip if !at.coversRange => Some(s"the ${rankToWord(at.multiplicityRangeLimits.inclusiveLowerBound)}" + 
+      (at.multiplicityRangeLimits.inclusiveUpperBound match {
+        case None => " or higher"
+        case Some(upper) => if (at.multiplicityRangeLimits.inclusiveLowerBound == upper) "" else s" through ${rankToWord(upper)}"  
+      }))
+      case _ => None
+    }
+    // TODO Figure out when to use the with multiplicity
+    def dtElement(dtt: DataTypeTip): Option[String] = dtt.parent match {
+      case Some(atParent: AssimilationTip) if dtt.contiguousParent => if (atElement(atParent).isDefined) None else {
+        if (atParent.tip.assimilation.dataTypeReferences.size > 1) {
+          val subTypeDescription = prepareForAppending(dtDescription(dtt.tip))
+          Some(s"(applicable if ${anOrA(subTypeDescription)} $subTypeDescription)")
+        } else None
+      }
+      case Some(atParent: AssimilationTip) if !dtt.contiguousParent => None
+      case _ => Some(s" of the ${prepareForAppending(dtDescription(dtt.tip))}")
+    }
+    def atElement(at: AssimilationTip): Option[String] = atDescription(at.tip).map(prepareForAppending).map {
+      desc => multiplicityPrefix(at) match {
+        case Some(prefix) => s"of the $prefix $desc"
+        case None => s"of the $desc"
+      }
+    }
+    def element(bap: BrokenAssimilationPath) = bap match {
+      case at:AssimilationTip => atElement(at)
+      case dt:DataTypeTip => dtElement(dt)
+    }
+    def dtDescription(dt: DataType) = dt.description.getOrElse(dt.name)
+    def atDescription(aa: AbsoluteAssimilation) = aa.assimilation.description.orElse(aa.assimilation.name)
+    brokenAssimilationPath match {
+      case at: AssimilationTip if at.length <= 2 && atDescription(at.tip).isEmpty => s"$DefaultAssimilationDescriptionPrefix ${dtDescription(at.tip.dataType)}"
+      case bap => sentenceCaseAndTerminate(bap.toSeq.reverse.flatMap(element).mkString(" ").drop("of the ".length))
+    }
+  }
+  
   def name(tipEither: Either[DataType, AbsoluteAssimilation]): String = tipEither match {
     case Left(dt) => dt.name
     case Right(aa) => aa.assimilation.name.getOrElse(s"${name(Left(aa.dataType))} $DefaultAssimilationName")

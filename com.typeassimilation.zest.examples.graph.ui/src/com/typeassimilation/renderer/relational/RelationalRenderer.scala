@@ -184,6 +184,7 @@ object RelationalRenderer {
 
   object NamingPolicy {
     object Default extends NamingPolicy {
+      import WordUtils._
       val shorten = Map(
           "IDENTIFIER" -> "ID",
           "CODE" -> "CD",
@@ -199,11 +200,11 @@ object RelationalRenderer {
       def tableName(logicalTable: LogicalTable)(implicit config: Config): String = underscoreDelimitedName(AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath))
       def tableDescription(logicalTable: LogicalTable)(implicit config: Config): Option[String] = logicalTable.assimilationPath.tipDescription
       def columnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = underscoreDelimitedName(relativeName(parentLogicalTable.assimilationPath, assimilationPath))
-      def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription //TODO This should be a more complex version of the naming function
+      def columnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = Some(relativeDescription(parentLogicalTable.assimilationPath, assimilationPath))
       def foreignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): String = columnName(parentLogicalTable, assimilationPath) + "_" + referencePrimaryKeyColumn.name
-      def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = assimilationPath.tipDescription 
+      def foreignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = referencePrimaryKeyColumn.description.map(prepareForAppending).map("Reference to " + _).map(sentenceCaseAndTerminate)
       def parentForeignKeyColumnName(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): String = referencePrimaryKeyColumn.name
-      def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = referencePrimaryKeyColumn.description.map("Reference to " + _)
+      def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = referencePrimaryKeyColumn.description.map(prepareForAppending).map("Reference to " + _).map(sentenceCaseAndTerminate)
       def enumerationName(assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = AssimilationPathUtils.name(assimilationPath.tipEither).replaceAll("\\s+", "")
       def enumerationValueName(assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = underscoreDelimitedName(AssimilationPathUtils.name(assimilationPath.tipEither))
       def enumerationValueDescription(assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription 
@@ -338,5 +339,14 @@ object RelationalRenderer {
             else childJap.commonAssimilationPath.withNoParent
         }
     }
-  
+  def relativeDescription(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath): String =
+    childJap.relativeTo(parentJap).map(_.commonAssimilationPath) match {
+      case Some(ap) => AssimilationPathUtils.description(ap)
+      case None => 
+        AssimilationPathUtils.description {
+            val commonPathSeq = childJap.commonAssimilationPath.toSeq
+            if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
+            else childJap.commonAssimilationPath.withNoParent
+        }
+    }
 }
