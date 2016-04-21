@@ -22,11 +22,13 @@ object RelationalModel {
   def apply(logicalRelationalModel: LogicalRelationalModel): RelationalModel = RelationalModel(logicalRelationalModel.tables.map(t => table(t, logicalRelationalModel)))
   def primaryKeys(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = {
     implicit val config = logicalRelationalModel.config
-    config.primaryKeyPolicy.modifyPrimaryKeys(
-      logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
-      logicalRelationalModel.config.namingPolicy.tableName(logicalTable),
-      logicalTable,
-      logicalRelationalModel)
+    config.versioningPolicy.modifyPrimaryKeys(
+      config.primaryKeyPolicy.modifyPrimaryKeys(
+        logicalTable.columnGroups.filter(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)).map(_.copy(isPrimaryKey = true)),
+        logicalRelationalModel.config.namingPolicy.tableName(logicalTable),
+        logicalTable,
+        logicalRelationalModel),
+      logicalTable, logicalRelationalModel)
   }
   case class TableDescriptor(name: String, primaryKeys: Seq[Column])
   def tableDescriptor(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): TableDescriptor = TableDescriptor(tableName(logicalTable, logicalRelationalModel), primaryKeys(logicalTable, logicalRelationalModel))
@@ -53,7 +55,9 @@ object RelationalModel {
       name = descriptor.name,
       description = config.namingPolicy.tableDescription(logicalTable),
       columns = descriptor.primaryKeys ++
-        logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)),
+        config.versioningPolicy.modifyNonPrimaryKeys(
+            logicalTable.columnGroups.filterNot(cg => config.primaryKeyPolicy.isPrimaryKeyColumnGroup(cg, logicalTable, logicalRelationalModel)).flatMap(cg => columns(cg, logicalTable, logicalRelationalModel)),
+        logicalTable, logicalRelationalModel),
       assimilationPath = logicalTable.assimilationPath)
   }
   def columns(columnGroup: ColumnGroup, parentLogicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = {
@@ -97,7 +101,7 @@ object RelationalModel {
           val parentTd = tableDescriptor(parentLogicalTable, logicalRelationalModel)
           parentTd.primaryKeys.flatMap(pk => sourceLogicalTables(pk.toForeignKeyReference(parentTd.name), logicalRelationalModel)).toSet + parentLogicalTable
         } else Set()
-        referencedTable.primaryKeys.filterNot(pk => cr.isReferenceToWeakAssimilationWithCommonParent &&
+        config.versioningPolicy.modifyChildForeignKeys(cr, referencedTable.primaryKeys.filterNot(pk => cr.isReferenceToWeakAssimilationWithCommonParent &&
             !((parentTables & sourceLogicalTables(pk.toForeignKeyReference(referencedTable.name), logicalRelationalModel).toSet).isEmpty)
           ).map(pk => Column(
             name = config.namingPolicy.foreignKeyColumnName(parentLogicalTable, cr.assimilationPath, pk),
@@ -106,7 +110,7 @@ object RelationalModel {
             isGenerated = pk.isGenerated,
             isNullable = nullable,
             foreignKeyReference = Some(pk.toForeignKeyReference(referencedTable.name)),
-            assimilationPath = cr.assimilationPath))
+            assimilationPath = cr.assimilationPath)), parentLogicalTable, logicalRelationalModel)
       case pr: ParentReference =>
         val referencedTable = tableDescriptor(logicalRelationalModel.follow(pr), logicalRelationalModel)
         referencedTable.primaryKeys.map(pk => Column(
@@ -139,6 +143,10 @@ case class Table(name: String, description: Option[String], columns: Seq[Column]
   override def toString = name + (if (description.isDefined) s": ${description.get}" else "") + s" [$assimilationPath] {\n" + columns.map(c => s"\t${c.toString}").mkString("\n") + "\n}\n"
 }
 case class Column(name: String, description: Option[String], `type`: ColumnType, isGenerated: Boolean, isNullable: Boolean, assimilationPath: JoinedAssimilationPath, isPrimaryKey: Boolean = false, enumeration: Option[Enumeration] = None, foreignKeyReference: Option[ColumnReference] = None) {
+  def isIdentifying(logicalTable: LogicalTable) = assimilationPath.relativeTo(logicalTable.assimilationPath).get.commonHead match {
+    case at: AssimilationPath.AssimilationTip => at.tip.assimilation.isIdentifying
+    case _ => false
+  }
   override def toString = s"$name " + `type`.typeDefinition + (if (enumeration.isDefined) s" (ENUM: ${enumeration.get.name})" else "") + {
     if (isPrimaryKey && foreignKeyReference.isEmpty) " (PK)"
     else if (!isPrimaryKey && foreignKeyReference.isDefined) " (FK -> " + foreignKeyReference.get + ")"

@@ -446,6 +446,7 @@ sealed trait JoinedAssimilationPath {
   }
   def parents: Iterable[JoinedAssimilationPath]
   def heads = assimilationPaths.map(_.head)
+  lazy val commonHead = if (heads.size == 1) heads.head else throw new IllegalStateException(s"Multiple heads on $this.")
   def singleChild: JoinedAssimilationPath
   def hasSingleChild: Boolean = assimilationPaths.head.hasSingleChild
   def parentToChildMap[P <: JoinedAssimilationPath](parentJap: P) = parentJap.assimilationPaths.map(pap => pap -> assimilationPaths.filter(_.isChildOf(pap)).toSet).toMap

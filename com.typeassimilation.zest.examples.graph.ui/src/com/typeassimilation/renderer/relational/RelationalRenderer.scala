@@ -9,7 +9,7 @@ object RelationalRenderer {
     def assimilationPath: JoinedAssimilationPath
     def model = assimilationPath.model
     def withAssimilationPath(jap: JoinedAssimilationPath): T
-    def technicalDescription(logicalTable: LogicalTable, prefix: String = "") : String
+    def technicalDescription(logicalTable: LogicalTable, prefix: String = ""): String
     def size: Int
     def canMergeWith(that: ColumnGroup): Boolean = this.getClass == that.getClass && assimilationPath.tipEither == that.assimilationPath.tipEither
     def mergeWith(that: ColumnGroup): ColumnGroup = if (canMergeWith(that)) doMerge(this.asInstanceOf[T], that.asInstanceOf[T]) else throw new IllegalStateException(s"Cannot merge ColumnGroup '$this' with '$that'.")
@@ -20,37 +20,37 @@ object RelationalRenderer {
       type T = Repeated
       def assimilationPath = columnGroup.assimilationPath
       def withAssimilationPath(jap: JoinedAssimilationPath) = copy(columnGroup = columnGroup.withAssimilationPath(jap))
-      def technicalDescription(logicalTable: LogicalTable, prefix: String) : String = s"$prefix${repeats} x { ${columnGroup.technicalDescription(logicalTable)} }"
+      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"$prefix${repeats} x { ${columnGroup.technicalDescription(logicalTable)} }"
       def doMerge(thisColumnGroup: Repeated, thatColumnGroup: Repeated): Repeated = thisColumnGroup.copy(columnGroup = columnGroup.mergeWith(thatColumnGroup.columnGroup))
       def size = columnGroup.size * repeats
     }
     case class NestedTable(assimilationPath: JoinedAssimilationPath, columnGroups: Seq[ColumnGroup]) extends ColumnGroup {
       type T = NestedTable
       def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap, columnGroups = columnGroups.map(cg => cg.withAssimilationPath(cg.assimilationPath.substituteParent(jap))))
-      def technicalDescription(logicalTable: LogicalTable, prefix: String) : String = s"${prefix}NESTED: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" + (if (columnGroups.isEmpty) "" else s" {\n${columnGroups.map(_.technicalDescription(logicalTable, prefix + "  ")).mkString(s"\n")}\n$prefix}")
+      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"${prefix}NESTED: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" + (if (columnGroups.isEmpty) "" else s" {\n${columnGroups.map(_.technicalDescription(logicalTable, prefix + "  ")).mkString(s"\n")}\n$prefix}")
       def doMerge(thisColumnGroup: NestedTable, thatColumnGroup: NestedTable): NestedTable = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath, columnGroups = (thisColumnGroup.columnGroups zip thatColumnGroup.columnGroups).map {
-        case (thisCg, thatCg) => thisCg.mergeWith(thatCg)  
+        case (thisCg, thatCg) => thisCg.mergeWith(thatCg)
       })
       def size = columnGroups.foldLeft(0)((sum, cg) => sum + cg.size)
     }
     case class SimpleColumn(assimilationPath: JoinedAssimilationPath, columnType: ColumnType) extends ColumnGroup {
       type T = SimpleColumn
       def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap)
-      def technicalDescription(logicalTable: LogicalTable, prefix: String) : String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [$assimilationPath]"
+      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"$prefix${relativeName(logicalTable.assimilationPath, assimilationPath)} $columnType [$assimilationPath]"
       def doMerge(thisColumnGroup: SimpleColumn, thatColumnGroup: SimpleColumn): SimpleColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class EnumerationColumn(assimilationPath: JoinedAssimilationPath.AssimilationTip) extends ColumnGroup {
       type T = EnumerationColumn
       def withAssimilationPath(jap: JoinedAssimilationPath) = jap match { case at: JoinedAssimilationPath.AssimilationTip => copy(assimilationPath = at); case _ => throw new IllegalArgumentException(s"Must be a AssimilationTip for ColumnGroup: $this") }
-      def technicalDescription(logicalTable: LogicalTable, prefix: String) : String = s"${prefix}ENUMERATION: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]" 
+      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"${prefix}ENUMERATION: ${relativeName(logicalTable.assimilationPath, assimilationPath)} [$assimilationPath]"
       def doMerge(thisColumnGroup: EnumerationColumn, thatColumnGroup: EnumerationColumn): EnumerationColumn = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
     }
     case class ParentReference(assimilationPath: JoinedAssimilationPath) extends ColumnGroup {
       type T = ParentReference
       def withAssimilationPath(jap: JoinedAssimilationPath) = copy(assimilationPath = jap)
-      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]" 
+      def technicalDescription(logicalTable: LogicalTable, prefix: String): String = s"${prefix}Parent reference to ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath]"
       def doMerge(thisColumnGroup: ParentReference, thatColumnGroup: ParentReference): ParentReference = thisColumnGroup.copy(assimilationPath = thisColumnGroup.assimilationPath | thatColumnGroup.assimilationPath)
       def size = 1
       def parentAssimilationPath = {
@@ -73,7 +73,7 @@ object RelationalRenderer {
       }
       lazy val isReferenceToWeakAssimilationWithCommonParent =
         childAssimilationPath.effectiveAssimilationStrength == Some(AssimilationStrength.Weak) &&
-        (assimilationPath.relativeToLastEffectiveOrientatingDataType.heads subsetOf childAssimilationPath.relativeToLastEffectiveOrientatingDataType.heads)
+          (assimilationPath.relativeToLastEffectiveOrientatingDataType.heads subsetOf childAssimilationPath.relativeToLastEffectiveOrientatingDataType.heads)
     }
     def apply(logicalTable: LogicalTable): ColumnGroup = {
       val columnGroups = logicalTable.columnGroups.filterNot(_.isInstanceOf[ParentReference])
@@ -87,8 +87,8 @@ object RelationalRenderer {
     def technicalDescription = s"TABLE: ${AssimilationPathUtils.name(assimilationPath.commonAssimilationPath)} [$assimilationPath] {\n${columnGroups.map(_.technicalDescription(this, "  ")).mkString("\n")}\n}\n"
     def allColumnGroups: Seq[ColumnGroup] = {
       def recurseColumnGroups(cg: ColumnGroup): Seq[ColumnGroup] = cg match {
-        case r:Repeated => Seq(r) ++ recurseColumnGroups(r.columnGroup)
-        case nt:NestedTable => Seq(nt) ++ nt.columnGroups.flatMap(recurseColumnGroups(_))
+        case r: Repeated => Seq(r) ++ recurseColumnGroups(r.columnGroup)
+        case nt: NestedTable => Seq(nt) ++ nt.columnGroups.flatMap(recurseColumnGroups(_))
         case cg => Seq(cg)
       }
       columnGroups.flatMap(recurseColumnGroups(_))
@@ -97,15 +97,16 @@ object RelationalRenderer {
     def assimilationPaths = nestedAssimilationPaths ++ AssimilationPathUtils.merge(nestedAssimilationPaths) + assimilationPath
     def canMergeWith(parent: LogicalTable, that: LogicalTable): Boolean =
       this.assimilationPath.tipEither == that.assimilationPath.tipEither &&
-      parent.assimilationPaths.contains(this.parentReferenceOption.get.parentAssimilationPath) &&
-      parent.assimilationPaths.contains(that.parentReferenceOption.get.parentAssimilationPath)
+        parent.assimilationPaths.contains(this.parentReferenceOption.get.parentAssimilationPath) &&
+        parent.assimilationPaths.contains(that.parentReferenceOption.get.parentAssimilationPath)
     def mergeWith(parent: LogicalTable, that: LogicalTable): LogicalTable = if (canMergeWith(parent, that)) copy(assimilationPath = this.assimilationPath | that.assimilationPath, columnGroups = (this.columnGroups zip that.columnGroups).map {
       case (thisCg, thatCg) => thisCg.mergeWith(thatCg)
-    }) else throw new IllegalStateException(s"Cannot merge $this with $that.")
+    })
+    else throw new IllegalStateException(s"Cannot merge $this with $that.")
   }
   case class LogicalRelationalModel(tables: Set[LogicalTable], config: Config) {
-    private val assimilationPathToTableMap: mutable.Map[JoinedAssimilationPath, LogicalTable] = mutable.Map(tables.flatMap(lt => lt.assimilationPaths.map(ap => ap -> lt)).toArray:_*)
-    private def logicalTable(assimilationPath: JoinedAssimilationPath) = assimilationPathToTableMap.getOrElseUpdate(assimilationPath, {
+    private val assimilationPathToTableMap: mutable.Map[JoinedAssimilationPath, LogicalTable] = mutable.Map(tables.flatMap(lt => lt.assimilationPaths.map(ap => ap -> lt)).toArray: _*)
+    def logicalTable(assimilationPath: JoinedAssimilationPath) = assimilationPathToTableMap.getOrElseUpdate(assimilationPath, {
       val apToSeek = assimilationPath.relativeToLastEffectiveOrientatingDataType
       assimilationPathToTableMap.keysIterator.find(_.covers(apToSeek)) match {
         case Some(ap) => assimilationPathToTableMap(ap)
@@ -116,7 +117,7 @@ object RelationalRenderer {
     def follow(childReference: ColumnGroup.ChildReference) = logicalTable(childReference.childAssimilationPath)
     override def toString = tables.toSeq.sortBy(t => AssimilationPathUtils.name(t.assimilationPath.commonAssimilationPath)).map(_.technicalDescription).mkString("\n")
   }
-  
+
   case class LogicalTableSet(table: LogicalTable, childLogicalTableSets: Set[LogicalTableSet]) {
     def toSet: Set[LogicalTable] = childLogicalTableSets.flatMap(_.toSet) + table
     def canMergeWith(parent: LogicalTable, that: LogicalTableSet) = table.canMergeWith(parent, that.table)
@@ -127,7 +128,7 @@ object RelationalRenderer {
           childLogicalTableSets = {
             val cts2Map = ts2.childLogicalTableSets.map(cts2 => cts2.table.assimilationPath -> cts2).toMap
             def failSelectingEquivalentChild(cts1: LogicalTableSet) = throw new IllegalStateException(s"Could not find equivalent child to ${cts1.table.technicalDescription} in ${ts2.childLogicalTableSets.map(_.table.technicalDescription).mkString(",")}.")
-            ts1.childLogicalTableSets.map{cts1 => 
+            ts1.childLogicalTableSets.map { cts1 =>
               val ts2EquivalentAp = AssimilationPathUtils.mostJoinable(cts1.table.assimilationPath, cts2Map.keys).headOption.getOrElse(failSelectingEquivalentChild(cts1))
               recurse(table, cts1, cts2Map.getOrElse(ts2EquivalentAp, failSelectingEquivalentChild(cts1)))
             }
@@ -136,7 +137,7 @@ object RelationalRenderer {
       recurse(parent, this, that)
     }
   }
-  
+
   object Implicits {
     case class EnhancedColumnReference(columnReference: ColumnReference) {
       def table(implicit model: RelationalModel) = model.table(columnReference.tableName)
@@ -150,6 +151,7 @@ object RelationalRenderer {
     maximumSubTypeColumnsBeforeSplittingOut: Option[Int] = Some(10),
     namingPolicy: NamingPolicy = NamingPolicy.Default,
     primaryKeyPolicy: PrimaryKeyPolicy = PrimaryKeyPolicy.SurrogateKeyGeneration,
+    versioningPolicy: VersioningPolicy = VersioningPolicy.None,
     surrogateKeyColumnType: ColumnType = ColumnType("NUMBER(15)"),
     enumerationColumnType: String = "VARCHAR([SIZE])",
     columnTypeMap: Map[FilePath.Absolute, ColumnType] = Map(
@@ -163,11 +165,10 @@ object RelationalRenderer {
       FilePath("/common/code3.type.xml").asAbsolute -> ColumnType("CHAR(3)"),
       FilePath("/common/textblock.type.xml").asAbsolute -> ColumnType("VARCHAR(500)"),
       FilePath("/common/shortname.type.xml").asAbsolute -> ColumnType("VARCHAR(50)"),
-      FilePath("/common/longname.type.xml").asAbsolute -> ColumnType("VARCHAR(100)")
-    )) {
+      FilePath("/common/longname.type.xml").asAbsolute -> ColumnType("VARCHAR(100)"))) {
     def mappedColumnType(dt: DataType) = columnTypeMap.get(dt.filePath)
   }
-    
+
   trait NamingPolicy {
     def tableName(logicalTable: LogicalTable)(implicit config: Config): String
     def tableDescription(logicalTable: LogicalTable)(implicit config: Config): Option[String]
@@ -186,16 +187,15 @@ object RelationalRenderer {
     object Default extends NamingPolicy {
       import WordUtils._
       val shorten = Map(
-          "IDENTIFIER" -> "ID",
-          "CODE" -> "CD",
-          "NAME" -> "NM",
-          "NAMES" -> "NM",
-          "DATE" -> "DT",
-          "DATETIME" -> "DTTM",
-          "TIME" -> "TM",
-          "NUMBER" -> "NO",
-          "COUNT" -> "CNT"
-        ).withDefault(s => s)
+        "IDENTIFIER" -> "ID",
+        "CODE" -> "CD",
+        "NAME" -> "NM",
+        "NAMES" -> "NM",
+        "DATE" -> "DT",
+        "DATETIME" -> "DTTM",
+        "TIME" -> "TM",
+        "NUMBER" -> "NO",
+        "COUNT" -> "CNT").withDefault(s => s)
       private def underscoreDelimitedName(s: String) = s.trim.replaceAll("\\s+", "_").toUpperCase.split('_').map(shorten).mkString("_")
       def tableName(logicalTable: LogicalTable)(implicit config: Config): String = underscoreDelimitedName(AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath))
       def tableDescription(logicalTable: LogicalTable)(implicit config: Config): Option[String] = logicalTable.assimilationPath.tipDescription
@@ -207,10 +207,10 @@ object RelationalRenderer {
       def parentForeignKeyColumnDescription(parentLogicalTable: LogicalTable, assimilationPath: JoinedAssimilationPath, referencePrimaryKeyColumn: Column)(implicit config: Config): Option[String] = referencePrimaryKeyColumn.description.map(prepareForAppending).map("Reference to " + _).map(sentenceCaseAndTerminate)
       def enumerationName(assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = AssimilationPathUtils.name(assimilationPath.tipEither).replaceAll("\\s+", "")
       def enumerationValueName(assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = underscoreDelimitedName(AssimilationPathUtils.name(assimilationPath.tipEither))
-      def enumerationValueDescription(assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription 
+      def enumerationValueDescription(assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription
     }
   }
-  
+
   trait PrimaryKeyPolicy {
     def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Boolean
     def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column]
@@ -225,30 +225,72 @@ object RelationalRenderer {
       }).isDefined
       def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Boolean = isManyToMany(logicalTable) && (columnGroup match {
         case pr: ParentReference => true
-        case cr: ChildReference => cr.assimilationPath == logicalTable.parentReferenceOption.get.assimilationPath 
+        case cr: ChildReference => cr.assimilationPath == logicalTable.parentReferenceOption.get.assimilationPath
         case _ => false
       })
       def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = if (currentPrimaryKeys.isEmpty) Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)) else currentPrimaryKeys
     }
     case class NaturalKey(suffix: String = "_ID") extends PrimaryKeyPolicy {
-      private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.exists(cg => isIdentifyingColumnGroup(cg, logicalTable)) 
+      private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.exists(cg => isIdentifyingColumnGroup(cg, logicalTable))
       private def isIdentifyingColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable) = columnGroup.assimilationPath.relativeTo(logicalTable.assimilationPath) match {
         case Some(relativeAp) => relativeAp.heads.exists(_ match {
-          case at:AssimilationPath.AssimilationTip => at.tip.assimilation.isIdentifying
+          case at: AssimilationPath.AssimilationTip => at.tip.assimilation.isIdentifying
           case _ => false
         })
         case None => false
       }
       def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Boolean = (!hasIdentifyingColumnGroup(logicalTable) && columnGroup.isInstanceOf[ColumnGroup.ParentReference]) || isIdentifyingColumnGroup(columnGroup, logicalTable)
       def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column] = currentPrimaryKeys ++ (
-          if (hasIdentifyingColumnGroup(logicalTable)) Seq()
-          else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)}."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true))
-      )
+        if (hasIdentifyingColumnGroup(logicalTable)) Seq()
+        else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)}."), logicalRelationalModel.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)))
     }
   }
-  
-  def render(implicit model: Model, config: Config = Config()) = 
-      LogicalRelationalModel(model.effectivelyOrientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), config)
+
+  trait VersioningPolicy {
+    def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column]
+    def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column]
+    def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel): Seq[Column]
+  }
+
+  object VersioningPolicy {
+    case object None extends VersioningPolicy {
+      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = currentPrimaryKeys
+      def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = currentNonPrimaryKeys
+      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = currentForeignKeys
+    }
+    case class Type2(validFromColumnName: String = "VALID_FROM", validToColumnName: String = "VALID_TO", dateColumnType: ColumnType = ColumnType("DATE")) extends VersioningPolicy {
+      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = currentPrimaryKeys :+ Column(validFromColumnName, Some("The valid from date."), dateColumnType, true, false, logicalTable.assimilationPath, true)
+      def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = Column(validToColumnName, Some("The valid to date."), dateColumnType, true, true, logicalTable.assimilationPath, false) +: currentNonPrimaryKeys
+      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = currentForeignKeys.filterNot(_.name == validFromColumnName)
+    }
+    case class NearestOrientating(revisionDttmSuffix: String = "_REVISION_DTTM", dateColumnType: ColumnType = ColumnType("DATE"), applyToPk: Boolean = true, tieVersions: Boolean = true) extends VersioningPolicy {
+      private def revisionDttmColumnName(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = RelationalModel.tableName(logicalTable, logicalRelationalModel) + revisionDttmSuffix
+      private def revisionDttmColumn(logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = Column(revisionDttmColumnName(logicalTable, logicalRelationalModel), Some("The revision date / time for this record."), dateColumnType, true, false, logicalTable.assimilationPath, true)
+      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = if (applyToPk) logicalTable.assimilationPath match {
+        case dtt: JoinedAssimilationPath.DataTypeTip if dtt.tip.isEffectivelyOrientating => currentPrimaryKeys :+ revisionDttmColumn(logicalTable, logicalRelationalModel)
+        case jap => currentPrimaryKeys
+      }
+      else currentPrimaryKeys
+      def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = if (!applyToPk && (logicalTable.assimilationPath match {
+        case dtt: JoinedAssimilationPath.DataTypeTip => dtt.tip.isEffectivelyOrientating
+        case _ => false
+      })) {
+        val revisionColumn = revisionDttmColumn(logicalTable, logicalRelationalModel)
+        val (revisionColumnAdded, columns) = currentNonPrimaryKeys.foldLeft((false, Seq.empty[Column])) {
+          case ((encountered, finalColumns), column) => 
+            if (!encountered && !column.isIdentifying(logicalTable) && finalColumns.last.isIdentifying(logicalTable)) (true, finalColumns :+ revisionColumn :+ column)
+            else (encountered, finalColumns :+ column)
+        }
+        if (revisionColumnAdded) columns
+        else if (columns.last.isIdentifying(logicalTable)) columns :+ revisionColumn
+        else revisionColumn +: columns
+      } else currentNonPrimaryKeys
+      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable, logicalRelationalModel: LogicalRelationalModel) = if (applyToPk && !tieVersions) currentForeignKeys.filterNot(_.foreignKeyReference.exists(fkr => fkr.columnName == fkr.tableName + revisionDttmSuffix)) else currentForeignKeys
+    }
+  }
+
+  def render(implicit model: Model, config: Config = Config()) =
+    LogicalRelationalModel(model.effectivelyOrientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), config)
 
   def columnGroupsAndChildTables(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config): (Seq[ColumnGroup], Set[LogicalTableSet]) = {
     val tableSet = toTableFromAssimilation(assimilationPath)
@@ -280,7 +322,7 @@ object RelationalRenderer {
     }
     recurse(Set(), childLogicalTableSets)
   }
-  
+
   def toSimpleColumnGroup(assimilationPath: JoinedAssimilationPath.DataTypeTip)(implicit config: Config): ColumnGroup.SimpleColumn =
     ColumnGroup.SimpleColumn(assimilationPath, config.mappedColumnType(assimilationPath.tip).get)
 
@@ -295,9 +337,8 @@ object RelationalRenderer {
           } else (fcs, fts + ts)
       }
       val table = LogicalTable(
-          assimilationPath = assimilationPath,
-          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath)) ++ columns :+ ColumnGroup.EnumerationColumn(assimilationPath)
-        )
+        assimilationPath = assimilationPath,
+        columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath)) ++ columns :+ ColumnGroup.EnumerationColumn(assimilationPath))
       LogicalTableSet(table, mergeJoinableChildLogicalTableSets(table, childTables))
     } else throw new IllegalStateException(s"It is illegal for assimililation '${assimilationPath.tip}' to have no data type references.")
   }
@@ -305,16 +346,14 @@ object RelationalRenderer {
   def toTableFromDataTypeOrReference(assimilationPath: JoinedAssimilationPath.DataTypeTip)(implicit config: Config): LogicalTableSet = {
     if (assimilationPath.effectiveAssimilationStrength == Some(AssimilationStrength.Reference)) {
       LogicalTableSet(
-          LogicalTable(
-            assimilationPath = assimilationPath,
-            columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), ColumnGroup.ChildReference(assimilationPath))
-          ), Set())
+        LogicalTable(
+          assimilationPath = assimilationPath,
+          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), ColumnGroup.ChildReference(assimilationPath))), Set())
     } else if (config.mappedColumnType(assimilationPath.tip).isDefined) {
       LogicalTableSet(
-          LogicalTable(
-            assimilationPath = assimilationPath,
-            columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toSimpleColumnGroup(assimilationPath))
-          ), Set())
+        LogicalTable(
+          assimilationPath = assimilationPath,
+          columnGroups = Seq(ColumnGroup.ParentReference(assimilationPath), toSimpleColumnGroup(assimilationPath))), Set())
     } else toTableFromDataType(assimilationPath)
   }
 
@@ -323,30 +362,29 @@ object RelationalRenderer {
       case ((fcgs, fcts), (cgs, cts)) => (fcgs ++ cgs, fcts ++ cts)
     }
     val table = LogicalTable(
-        assimilationPath = assimilationPath,
-        columnGroups = (if (assimilationPath.parents.isEmpty) Seq() else Seq(ColumnGroup.ParentReference(assimilationPath))) ++ columnGroups
-      )
+      assimilationPath = assimilationPath,
+      columnGroups = (if (assimilationPath.parents.isEmpty) Seq() else Seq(ColumnGroup.ParentReference(assimilationPath))) ++ columnGroups)
     LogicalTableSet(table, mergeJoinableChildLogicalTableSets(table, childLogicalTableSets))
   }
 
-  def relativeName(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath): String = 
+  def relativeName(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath): String =
     childJap.relativeTo(parentJap).map(_.commonAssimilationPath) match {
       case Some(ap) => AssimilationPathUtils.name(ap)
-      case None => 
+      case None =>
         AssimilationPathUtils.name {
-            val commonPathSeq = childJap.commonAssimilationPath.toSeq
-            if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
-            else childJap.commonAssimilationPath.withNoParent
+          val commonPathSeq = childJap.commonAssimilationPath.toSeq
+          if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
+          else childJap.commonAssimilationPath.withNoParent
         }
     }
   def relativeDescription(parentJap: JoinedAssimilationPath, childJap: JoinedAssimilationPath): String =
     childJap.relativeTo(parentJap).map(_.commonAssimilationPath) match {
       case Some(ap) => AssimilationPathUtils.description(ap)
-      case None => 
+      case None =>
         AssimilationPathUtils.description {
-            val commonPathSeq = childJap.commonAssimilationPath.toSeq
-            if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
-            else childJap.commonAssimilationPath.withNoParent
+          val commonPathSeq = childJap.commonAssimilationPath.toSeq
+          if (commonPathSeq.size > 1) commonPathSeq.drop(commonPathSeq.size - 2).head.withNoParent
+          else childJap.commonAssimilationPath.withNoParent
         }
     }
 }
