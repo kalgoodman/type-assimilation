@@ -154,18 +154,7 @@ object RelationalRenderer {
     versioningPolicy: VersioningPolicy = VersioningPolicy.None,
     surrogateKeyColumnType: ColumnType = ColumnType("NUMBER(15)"),
     enumerationColumnType: String = "VARCHAR([SIZE])",
-    columnTypeMap: Map[FilePath.Absolute, ColumnType] = Map(
-      FilePath("/common/identifier.type.xml").asAbsolute -> ColumnType("VARCHAR(30)"),
-      FilePath("/common/datetime.type.xml").asAbsolute -> ColumnType("DATETIME"),
-      FilePath("/common/date.type.xml").asAbsolute -> ColumnType("DATE"),
-      FilePath("/common/integer.type.xml").asAbsolute -> ColumnType("INTEGER"),
-      FilePath("/common/decimal.type.xml").asAbsolute -> ColumnType("NUMBER(10, 5)"),
-      FilePath("/common/boolean.type.xml").asAbsolute -> ColumnType("CHAR(1)"),
-      FilePath("/common/code2.type.xml").asAbsolute -> ColumnType("CHAR(2)"),
-      FilePath("/common/code3.type.xml").asAbsolute -> ColumnType("CHAR(3)"),
-      FilePath("/common/textblock.type.xml").asAbsolute -> ColumnType("VARCHAR(500)"),
-      FilePath("/common/shortname.type.xml").asAbsolute -> ColumnType("VARCHAR(50)"),
-      FilePath("/common/longname.type.xml").asAbsolute -> ColumnType("VARCHAR(100)"))) {
+    columnTypeMap: Map[FilePath.Absolute, ColumnType]) {
     def mappedColumnType(dt: DataType) = columnTypeMap.get(dt.filePath)
   }
 
@@ -289,7 +278,7 @@ object RelationalRenderer {
     }
   }
 
-  def render(implicit model: Model, config: Config = Config()) =
+  def render(implicit model: Model, config: Config) =
     LogicalRelationalModel(model.effectivelyOrientatingDataTypes.map(dt => toTableFromDataType(JoinedAssimilationPath(dt))).flatMap(_.toSet), config)
 
   def columnGroupsAndChildTables(assimilationPath: JoinedAssimilationPath.AssimilationTip)(implicit config: Config): (Seq[ColumnGroup], Set[LogicalTableSet]) = {

@@ -6,11 +6,16 @@ import com.typeassimilation.renderer.relational.RelationalRenderer
 import com.typeassimilation.renderer.relational.RelationalModel
 import com.typeassimilation.renderer.relational.RelationalRenderer.Config
 import com.typeassimilation.renderer.relational.RelationalRenderer.PrimaryKeyPolicy
+import com.typeassimilation.renderer.relational.RelationalRenderer.VersioningPolicy
+import com.typeassimilation.renderer.relational.RelationalRendererPersistence
+import com.typeassimilation.model.FilePath
 
 object App {
     def main(args: Array[String]): Unit = {
-      val model = ModelPesistence.readDirectory(new File(args(0)))
-      val logical = RelationalRenderer.render(model, Config(primaryKeyPolicy = PrimaryKeyPolicy.SurrogateKeyGeneration))
+      val rootDirectory = new File(args(0))
+      val model = ModelPesistence.readDirectory(rootDirectory)
+      val relationalRendererConfig = RelationalRendererPersistence.fromFile(FilePath("/relational.xml").asAbsolute, rootDirectory)
+      val logical = RelationalRenderer.render(model, relationalRendererConfig)
       println("******* LOGICAL *******")
       println(logical)
       println()
