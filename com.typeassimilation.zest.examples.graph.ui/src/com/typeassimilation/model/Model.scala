@@ -484,6 +484,7 @@ sealed trait JoinedAssimilationPath {
     }
   def relativeToLastEffectiveOrientatingDataType: JoinedAssimilationPath
   def splitByParent: Iterable[JoinedAssimilationPath]
+  def hasEffectivelyOrientatingTip: Boolean
 }
 
 object JoinedAssimilationPath {
@@ -503,6 +504,7 @@ object JoinedAssimilationPath {
     }
     lazy val relativeToLastEffectiveOrientatingDataType = JoinedAssimilationPath(assimilationPaths.map(_.relativeToLastEffectiveOrientatingDataType))
     def splitByParent = assimilationPaths.groupBy(_.head).map(aps => JoinedAssimilationPath(aps._2)).toSet
+    def hasEffectivelyOrientatingTip = tip.isEffectivelyOrientating
   }
   case class AssimilationTip private[JoinedAssimilationPath](assimilationPaths: Set[AssimilationPath.AssimilationTip]) extends JoinedAssimilationPath {
     type A = AssimilationPath.AssimilationTip
@@ -516,6 +518,7 @@ object JoinedAssimilationPath {
     def |(jap: AssimilationTip) = AssimilationTip(assimilationPaths ++ jap.assimilationPaths)
     lazy val relativeToLastEffectiveOrientatingDataType = JoinedAssimilationPath(assimilationPaths.map(_.relativeToLastEffectiveOrientatingDataType))
     def splitByParent = assimilationPaths.groupBy(_.head).map(aps => JoinedAssimilationPath(aps._2)).toSet
+    def hasEffectivelyOrientatingTip = false
   }
   def apply(assimilationPaths: Set[AssimilationPath.AssimilationTip]): AssimilationTip = AssimilationTip(assimilationPaths)
   def apply(assimilationPaths: Set[AssimilationPath.DataTypeTip]): DataTypeTip = DataTypeTip(assimilationPaths)

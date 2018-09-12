@@ -9,6 +9,7 @@ import com.typeassimilation.renderer.relational.RelationalRenderer.PrimaryKeyPol
 import com.typeassimilation.renderer.relational.RelationalRenderer.VersioningPolicy
 import com.typeassimilation.renderer.relational.RelationalRendererPersistence
 import com.typeassimilation.model.FilePath
+import com.typeassimilation.renderer.relational.stagingvault.StagingVaultRelationalRenderer
 
 object App {
     def main(args: Array[String]): Unit = {
@@ -16,11 +17,13 @@ object App {
       val model = ModelPesistence.readDirectory(rootDirectory)
       val relationalRendererConfig = RelationalRendererPersistence.fromFile(FilePath("/relational.xml").asAbsolute, rootDirectory)
       val logical = RelationalRenderer.render(model, relationalRendererConfig)
-      println("******* LOGICAL *******")
-      println(logical)
-      println()
-      println("******* CONCRETE LOGICAL *******")
-      println(RelationalModel(logical))
-      ModelPesistence.writeDirectory(model, new File(args(1)))
+//      println("******* LOGICAL *******")
+//      println(logical)
+//      println()
+//      println("******* CONCRETE LOGICAL *******")
+//      println(RelationalModel(logical))
+//      ModelPesistence.writeDirectory(model, new File(args(1)))
+      
+      StagingVaultRelationalRenderer.render(model, relationalRendererConfig)
     }
 }

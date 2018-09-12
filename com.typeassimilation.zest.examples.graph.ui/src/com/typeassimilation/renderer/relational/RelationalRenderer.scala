@@ -96,10 +96,11 @@ object RelationalRenderer {
     }
     def nestedAssimilationPaths = allColumnGroups.flatMap { case nt: NestedTable => Some(nt); case _ => None }.map(_.assimilationPath).toSet
     def assimilationPaths = nestedAssimilationPaths ++ AssimilationPathUtils.merge(nestedAssimilationPaths) + assimilationPath
+    def covers(jap: JoinedAssimilationPath) = assimilationPaths.exists(_.covers(jap))
     def canMergeWith(parent: LogicalTable, that: LogicalTable): Boolean =
       this.assimilationPath.tipEither == that.assimilationPath.tipEither &&
-        parent.assimilationPaths.contains(this.parentReferenceOption.get.parentAssimilationPath) &&
-        parent.assimilationPaths.contains(that.parentReferenceOption.get.parentAssimilationPath)
+        parent.covers(this.parentReferenceOption.get.parentAssimilationPath) &&
+        parent.covers(that.parentReferenceOption.get.parentAssimilationPath)
     def mergeWith(parent: LogicalTable, that: LogicalTable): LogicalTable = if (canMergeWith(parent, that)) copy(assimilationPath = this.assimilationPath | that.assimilationPath, columnGroups = (this.columnGroups zip that.columnGroups).map {
       case (thisCg, thatCg) => thisCg.mergeWith(thatCg)
     })
@@ -128,15 +129,19 @@ object RelationalRenderer {
     def canMergeWith(parent: LogicalTable, that: LogicalTableSet) = table.canMergeWith(parent, that.table)
     def mergeWith(parent: LogicalTable, that: LogicalTableSet)(implicit config: Config): LogicalTableSet = {
       def recurse(p: LogicalTable, ts1: LogicalTableSet, ts2: LogicalTableSet): LogicalTableSet = {
+        val mergedParent = ts1.table.mergeWith(p, ts2.table) 
         LogicalTableSet(
-          table = ts1.table.mergeWith(p, ts2.table),
+          table = mergedParent,
           childLogicalTableSets = {
             val cts2Map = ts2.childLogicalTableSets.map(cts2 => cts2.table.assimilationPath -> cts2).toMap
             def failSelectingEquivalentChild(cts1: LogicalTableSet) = throw new IllegalStateException(s"Could not find equivalent child to ${cts1.table.technicalDescription} in ${ts2.childLogicalTableSets.map(_.table.technicalDescription).mkString(",")}.")
-            ts1.childLogicalTableSets.map { cts1 =>
-              val ts2EquivalentAp = AssimilationPathUtils.mostJoinable(cts1.table.assimilationPath, cts2Map.keys).headOption.getOrElse(failSelectingEquivalentChild(cts1))
-              recurse(table, cts1, cts2Map.getOrElse(ts2EquivalentAp, failSelectingEquivalentChild(cts1)))
+            val mergedChildren = ts1.childLogicalTableSets.map { cts1 =>
+              AssimilationPathUtils.mostJoinableUnder(mergedParent.assimilationPath, cts1.table.assimilationPath, cts2Map.keys).headOption match {
+                case Some(ts2EquivalentAp) => recurse(mergedParent, cts1, cts2Map.getOrElse(ts2EquivalentAp, failSelectingEquivalentChild(cts1)))
+                case None => cts1
+              }
             }
+            mergedChildren ++ cts2Map.keys.filterNot(cts2key => mergedChildren.map(_.table.assimilationPath).exists(_.covers(cts2key))).map(cts2Map)
           })
       }
       recurse(parent, this, that)
@@ -178,7 +183,7 @@ object RelationalRenderer {
   }
 
   object NamingPolicy {
-    object Default extends NamingPolicy {
+    trait Default extends NamingPolicy {
       import WordUtils._
       val shorten = Map(
         "IDENTIFIER" -> "ID",
@@ -203,11 +208,12 @@ object RelationalRenderer {
       def enumerationValueName(assimilationPath: JoinedAssimilationPath)(implicit config: Config): String = underscoreDelimitedName(AssimilationPathUtils.name(assimilationPath.tipEither))
       def enumerationValueDescription(assimilationPath: JoinedAssimilationPath)(implicit config: Config): Option[String] = assimilationPath.tipDescription
     }
+    object Default extends Default
   }
 
   trait PrimaryKeyPolicy {
     def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable): Boolean
-    def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable): Seq[Column]
+    def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], tableName: String, logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey])
   }
 
   object PrimaryKeyPolicy {
@@ -222,7 +228,7 @@ object RelationalRenderer {
         case cr: ChildReference => cr.assimilationPath == logicalTable.parentReferenceOption.get.assimilationPath
         case _ => false
       })
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable): Seq[Column] = if (currentPrimaryKeys.isEmpty) Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), logicalTable.model.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)) else currentPrimaryKeys
+      def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], tableName: String, logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey]) = if (currentPrimaryKeys.isEmpty) (Seq(Column(tableName + "_SK", Some(s"Surrogate Key (system generated) for the ${tableName} table."), logicalTable.model.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)), Set()) else (currentPrimaryKeys, currentAssociatedForeignKeys)
     }
     case class NaturalKey(suffix: String = "_ID") extends PrimaryKeyPolicy {
       private def hasIdentifyingColumnGroup(logicalTable: LogicalTable) = logicalTable.columnGroups.exists(cg => isIdentifyingColumnGroup(cg, logicalTable))
@@ -234,37 +240,37 @@ object RelationalRenderer {
         case None => false
       }
       def isPrimaryKeyColumnGroup(columnGroup: ColumnGroup, logicalTable: LogicalTable): Boolean = (!hasIdentifyingColumnGroup(logicalTable) && columnGroup.isInstanceOf[ColumnGroup.ParentReference]) || isIdentifyingColumnGroup(columnGroup, logicalTable)
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], tableName: String, logicalTable: LogicalTable): Seq[Column] = currentPrimaryKeys ++ (
+      def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], tableName: String, logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey]) = (currentPrimaryKeys ++ (
         if (hasIdentifyingColumnGroup(logicalTable)) Seq()
-        else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)}."), logicalTable.model.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true)))
+        else Seq(Column(tableName + suffix, Some(s"Unique identifier for each ${AssimilationPathUtils.name(logicalTable.assimilationPath.commonAssimilationPath)}."), logicalTable.model.config.surrogateKeyColumnType, true, false, logicalTable.assimilationPath, true))), currentAssociatedForeignKeys)
     }
   }
 
   trait VersioningPolicy {
-    def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable): Seq[Column]
+    def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey])
     def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable): Seq[Column]
-    def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable): Seq[Column]
+    def modifyChildForeignKeysAndColumns(childReference: ColumnGroup.ChildReference, currentForeignKeyColumns: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey])
   }
 
   object VersioningPolicy {
     case object None extends VersioningPolicy {
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = currentPrimaryKeys
+      def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable) = (currentPrimaryKeys, currentAssociatedForeignKeys)
       def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = currentNonPrimaryKeys
-      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable) = currentForeignKeys
+      def modifyChildForeignKeysAndColumns(childReference: ColumnGroup.ChildReference, currentForeignKeyColumns: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey]) = (currentForeignKeyColumns, currentAssociatedForeignKeys)
     }
     case class Type2(validFromColumnName: String = "VALID_FROM", validToColumnName: String = "VALID_TO", dateColumnType: ColumnType = ColumnType("DATE")) extends VersioningPolicy {
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = currentPrimaryKeys :+ Column(validFromColumnName, Some("The valid from date."), dateColumnType, true, false, logicalTable.assimilationPath, true)
+      def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable) = (currentPrimaryKeys :+ Column(validFromColumnName, Some("The valid from date."), dateColumnType, true, false, logicalTable.assimilationPath, true), currentAssociatedForeignKeys)
       def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = Column(validToColumnName, Some("The valid to date."), dateColumnType, true, true, logicalTable.assimilationPath, false) +: currentNonPrimaryKeys
-      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable) = currentForeignKeys.filterNot(_.name == validFromColumnName)
+      def modifyChildForeignKeysAndColumns(childReference: ColumnGroup.ChildReference, currentForeignKeyColumns: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable) = (currentForeignKeyColumns.filterNot(_.name == validFromColumnName), currentAssociatedForeignKeys.filterNot(_.columnNameMap.contains(validFromColumnName)))
     }
     case class NearestOrientating(revisionDttmSuffix: String = "_REVISION_DTTM", dateColumnType: ColumnType = ColumnType("DATE"), applyToPk: Boolean = true, tieVersions: Boolean = true) extends VersioningPolicy {
       private def revisionDttmColumnName(logicalTable: LogicalTable) = RelationalModel.tableName(logicalTable) + revisionDttmSuffix
       private def revisionDttmColumn(logicalTable: LogicalTable) = Column(revisionDttmColumnName(logicalTable), Some("The revision date / time for this record."), dateColumnType, true, false, logicalTable.assimilationPath, true)
-      def modifyPrimaryKeys(currentPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = if (applyToPk) logicalTable.assimilationPath match {
-        case dtt: JoinedAssimilationPath.DataTypeTip if dtt.tip.isEffectivelyOrientating => currentPrimaryKeys :+ revisionDttmColumn(logicalTable)
-        case jap => currentPrimaryKeys
+      def modifyPrimaryAndAssociatedForeignKeys(currentPrimaryKeys: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey]) = if (applyToPk) logicalTable.assimilationPath match {
+        case dtt: JoinedAssimilationPath.DataTypeTip if dtt.tip.isEffectivelyOrientating => (currentPrimaryKeys :+ revisionDttmColumn(logicalTable), currentAssociatedForeignKeys)
+        case jap => (currentPrimaryKeys, currentAssociatedForeignKeys)
       }
-      else currentPrimaryKeys
+      else (currentPrimaryKeys, currentAssociatedForeignKeys)
       def modifyNonPrimaryKeys(currentNonPrimaryKeys: Seq[Column], logicalTable: LogicalTable) = if (!applyToPk && (logicalTable.assimilationPath match {
         case dtt: JoinedAssimilationPath.DataTypeTip => dtt.tip.isEffectivelyOrientating
         case _ => false
@@ -279,7 +285,7 @@ object RelationalRenderer {
         else if (columns.last.isIdentifyingRelativeTo(logicalTable.assimilationPath)) columns :+ revisionColumn
         else revisionColumn +: columns
       } else currentNonPrimaryKeys
-      def modifyChildForeignKeys(childReference: ColumnGroup.ChildReference, currentForeignKeys: Seq[Column], logicalTable: LogicalTable) = if (applyToPk && !tieVersions) currentForeignKeys.filterNot(_.foreignKeyReference.exists(fkr => fkr.columnName == fkr.tableName + revisionDttmSuffix)) else currentForeignKeys
+      def modifyChildForeignKeysAndColumns(childReference: ColumnGroup.ChildReference, currentForeignKeyColumns: Seq[Column], currentAssociatedForeignKeys: Set[ForeignKey], logicalTable: LogicalTable): (Seq[Column], Set[ForeignKey]) = if (applyToPk && !tieVersions) /*Basically find if the column is named the same as the referenced table name + revision dttm suffix? */ (currentForeignKeyColumns, currentAssociatedForeignKeys) else (currentForeignKeyColumns, currentAssociatedForeignKeys)
     }
   }
 
